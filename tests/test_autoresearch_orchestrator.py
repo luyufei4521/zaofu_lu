@@ -34,7 +34,10 @@ from zf.core.events.log import EventLog
 
 def test_default_config_templates_exist() -> None:
     root = Path(__file__).resolve().parents[1]
+    expected = Path("examples/dev-codex-backends.yaml")
 
+    assert AutoresearchRunConfig().config_template == expected
+    assert LoopConfig().config_template == expected
     assert (root / AutoresearchRunConfig().config_template).is_file()
     assert (root / LoopConfig().config_template).is_file()
 
@@ -304,7 +307,7 @@ def test_write_campaign_plan_outputs_json_markdown_and_script(
         campaign=campaign,
         output_dir=tmp_path / "plan",
         worktree_root=tmp_path / "worktrees",
-        config_template=Path("examples/tmp/dev-codex-backends.yaml"),
+        config_template=Path("examples/dev-codex-backends.yaml"),
         use_tmux=False,
     )
 
@@ -327,7 +330,7 @@ def test_write_campaign_plan_threads_review_gate_mode(tmp_path: Path) -> None:
         campaign=campaign,
         output_dir=tmp_path / "plan",
         worktree_root=tmp_path / "worktrees",
-        config_template=Path("examples/tmp/dev-codex-backends.yaml"),
+        config_template=Path("examples/dev-codex-backends.yaml"),
         use_tmux=False,
         review_gate="auto",
     )

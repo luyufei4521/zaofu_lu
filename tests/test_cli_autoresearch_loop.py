@@ -59,6 +59,7 @@ def test_loop_defaults() -> None:
     assert args.parent_state_dir is None
     assert args.output_dir is None
     assert args.review_gate == "off"
+    assert args.config_template == Path("examples/dev-codex-backends.yaml")
 
 
 def test_loop_reflect_backend_defaults_from_env(monkeypatch) -> None:
@@ -101,6 +102,7 @@ def test_run_and_loop_parse_review_gate_modes() -> None:
     ])
 
     assert run_args.review_gate == "auto"
+    assert run_args.config_template == Path("examples/dev-codex-backends.yaml")
     assert loop_args.review_gate == "always"
 
 

@@ -143,6 +143,9 @@ def test_autoresearch_campaign_plan_writes_files(
     assert (out_dir / "run-campaign.sh").exists()
     payload = json.loads((out_dir / "campaign.json").read_text(encoding="utf-8"))
     assert payload["review_gate"] == "auto"
+    assert payload["config_template"] == str(
+        Path("examples/dev-codex-backends.yaml").resolve()
+    )
 
 
 def test_autoresearch_git_head_uses_project_root_from_config(

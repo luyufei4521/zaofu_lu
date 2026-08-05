@@ -867,9 +867,42 @@ def project_why_not_done(
                 expected=f"{blocker_id} done/cancelled",
                 owner_role=work_unit.owner_role,
             ))
+    acceptance_evidence = task.contract.acceptance_evidence
+    if not isinstance(acceptance_evidence, dict):
+        acceptance_evidence = {}
     for index, criterion in enumerate(task.contract.acceptance_criteria):
-        evidence = task.contract.acceptance_evidence.get(criterion)
-        evidence = evidence or task.contract.acceptance_evidence.get(str(index))
+        # Structured acceptance criteria are intentionally supported by the
+        # task contract (for example ``{"id": "AC-01", "statement": ...}``).
+        # They are mappings and therefore cannot be used directly as dict
+        # keys.  Resolve evidence through the canonical stable id/text fields
+        # before falling back to the historical stringified index key.
+        evidence_keys: list[str] = []
+        if isinstance(criterion, dict):
+            for field in (
+                "acceptance_id",
+                "id",
+                "text",
+                "statement",
+                "criterion",
+                "description",
+                "acceptance",
+            ):
+                value = str(criterion.get(field) or "").strip()
+                if value:
+                    evidence_keys.append(value)
+        else:
+            value = str(criterion or "").strip()
+            if value:
+                evidence_keys.append(value)
+        evidence_keys.append(str(index))
+        evidence = next(
+            (
+                acceptance_evidence[key]
+                for key in dict.fromkeys(evidence_keys)
+                if acceptance_evidence.get(key)
+            ),
+            None,
+        )
         if not evidence:
             reasons.append(WhyNotDoneReason(
                 kind="missing_acceptance_evidence",

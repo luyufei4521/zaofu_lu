@@ -139,6 +139,34 @@ def test_why_not_done_projects_work_unit_and_missing_evidence(tmp_path: Path) ->
     assert data["recommended_action"]["kind"] == "continuation"
 
 
+def test_why_not_done_accepts_structured_acceptance_criteria(
+    tmp_path: Path,
+) -> None:
+    """Recovery projection must not hash structured criterion mappings."""
+    state_dir = _state(tmp_path)
+    task = _add_task(state_dir)
+    task.contract.acceptance_criteria = [
+        {
+            "id": "AC-01",
+            "statement": "worker can resume after a crash",
+            "verification_owner": "task_verify",
+        },
+        {
+            "acceptance_id": "AC-02",
+            "text": "resume packet preserves the task boundary",
+        },
+    ]
+    task.contract.acceptance_evidence = {"AC-01": ["evt-accept"]}
+    TaskStore(state_dir / "kanban.json").update(task.id, contract=task.contract)
+
+    projection = project_why_not_done(state_dir, task.id)
+
+    reasons = projection.to_dict()["why_not_done"]
+    assert len(reasons) == 1
+    assert reasons[0]["kind"] == "missing_acceptance_evidence"
+    assert reasons[0]["expected"]["acceptance_id"] == "AC-02"
+
+
 def test_completion_audit_routes_done_when_required_evidence_exists(tmp_path: Path) -> None:
     state_dir = _state(tmp_path)
     task = _add_task(state_dir, required_events=["gate.passed"])

@@ -114,10 +114,17 @@ def run_aliases(events: Iterable[ZfEvent]) -> dict[str, str]:
                 ),
                 identities[0],
             )
+        # Canonical run anchors are independent lifecycle roots.  A malformed
+        # or stale event may carry one root in its payload and another in its
+        # correlation id; treating that row as an alias edge would let a
+        # terminal decision (notably run.cancelled) leak into the other run.
+        # Only pre-run / non-canonical namespaces may be collapsed here.
         replaced = {
             aliases[identity]
             for identity in identities
-            if identity in aliases and aliases[identity] != canonical
+            if identity in aliases
+            and aliases[identity] != canonical
+            and aliases[identity] not in canonical_roots
         }
         if replaced:
             aliases = {
@@ -125,8 +132,11 @@ def run_aliases(events: Iterable[ZfEvent]) -> dict[str, str]:
                 for alias, target in aliases.items()
             }
         for alias in identities:
-            if alias:
-                aliases[alias] = canonical
+            if not alias:
+                continue
+            if alias in canonical_roots and alias != canonical:
+                continue
+            aliases[alias] = canonical
     return aliases
 
 

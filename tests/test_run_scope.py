@@ -66,3 +66,34 @@ def test_pre_run_operation_keeps_legacy_identity_without_approved_anchor() -> No
 
     assert aliases[synthesis_id] == synthesis_id
     assert aliases[request_id] == synthesis_id
+
+
+def test_distinct_canonical_runs_are_not_merged_by_stale_cross_run_event() -> None:
+    cancelled_run = "recovery-run-old"
+    active_run = "workflow-current"
+    cancelled_anchor = ZfEvent(
+        type="run.goal.started",
+        correlation_id=cancelled_run,
+        payload={"run_id": cancelled_run},
+    )
+    active_anchor = ZfEvent(
+        type="run.goal.started",
+        correlation_id=active_run,
+        payload={"run_id": active_run},
+    )
+    stale_cross_run_event = ZfEvent(
+        type="workflow.operation.requested",
+        correlation_id=cancelled_run,
+        payload={"workflow_run_id": active_run},
+    )
+    events = [cancelled_anchor, active_anchor, stale_cross_run_event]
+
+    aliases = run_aliases(events)
+
+    assert aliases[cancelled_run] == cancelled_run
+    assert aliases[active_run] == active_run
+    assert events_for_run(events, run_id=cancelled_run) == [
+        cancelled_anchor,
+        stale_cross_run_event,
+    ]
+    assert events_for_run(events, run_id=active_run) == [active_anchor]

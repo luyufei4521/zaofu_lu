@@ -10,11 +10,14 @@ pytest.importorskip("httpx")
 from fastapi.testclient import TestClient
 
 from zf.core.config.schema import (
+    FanoutAggregateConfig,
     ProjectConfig,
     RoleConfig,
     SessionConfig,
+    WorkflowAdmissionReplanConfig,
     WorkflowConfig,
     WorkflowDagConfig,
+    WorkflowStageConfig,
     ZfConfig,
 )
 from zf.core.events.log import EventLog
@@ -120,9 +123,15 @@ def _client(
     state_dir: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    config: ZfConfig | None = None,
 ) -> TestClient:
     monkeypatch.setenv("ZF_WEB_ACTION_TOKEN", "test-token")
-    return TestClient(create_app(state_dir, config=_config(), project_root=tmp_path))
+    return TestClient(create_app(
+        state_dir,
+        config=config or _config(),
+        project_root=tmp_path,
+    ))
 
 
 def _headers() -> dict[str, str]:
@@ -202,6 +211,88 @@ def test_kanban_agent_can_request_candidate_replan_through_web_action(
     assert "orchestrator.replan_requested" in event_types
     assert "workflow.resume.control_action.result" in event_types
     assert "web.action.completed" in event_types
+
+
+def test_candidate_replan_recovers_prd_flow_from_source_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_dir, log = _state(tmp_path)
+    log.append(ZfEvent(
+        id="prd-plan-failed-1",
+        type="prd.plan.failed",
+        actor="zf-cli",
+        payload={
+            "pdd_id": "PRD-1",
+            "trace_id": "prd-run-1",
+            "flow_kind": "prd",
+            "target_ref": "channels/ch-prd/prd/r1.json",
+            "reason": "critic rejected the task map",
+        },
+        correlation_id="prd-run-1",
+    ))
+    config = ZfConfig(
+        project=ProjectConfig(name="kanban-agent-prd-recovery-test"),
+        session=SessionConfig(tmux_session="kanban-agent-prd-recovery-test"),
+        workflow=WorkflowConfig(
+            admission_replan=WorkflowAdmissionReplanConfig(
+                enabled=True,
+                resynth_trigger="zaofu.refactor.review.ready",
+            ),
+            stages=[WorkflowStageConfig(
+                id="prd-plan",
+                flow_kind="prd",
+                trigger="prd.scan.completed",
+                topology="fanout_reader",
+                aggregate=FanoutAggregateConfig(
+                    success_event="task_map.ready",
+                    failure_event="prd.plan.failed",
+                ),
+            )],
+        ),
+    )
+    client = _client(
+        state_dir,
+        tmp_path,
+        monkeypatch,
+        config=config,
+    )
+
+    response = client.post(
+        "/api/actions/candidate.rework.apply",
+        headers=_headers(),
+        json={
+            "checkpoint_id": "ck-prd-replan-1",
+            "candidate_rework_action": "replan",
+            "pdd_id": "PRD-1",
+            "source_event_id": "prd-plan-failed-1",
+            "source_event_type": "prd.plan.failed",
+            "trace_id": "prd-run-1",
+            "target_ref": "channels/ch-prd/prd/r1.json",
+            "classification": "verification_coverage",
+            "rework_attempt": 3,
+            "rework_feedback": ["repair the bidirectional command mapping"],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "applied"
+    events = log.read_all()
+    marker = [
+        event for event in events
+        if event.type == "orchestrator.replan_requested"
+    ][-1]
+    assert marker.payload["flow_kind"] == "prd"
+    assert any(
+        event.type == "prd.scan.completed"
+        and event.payload["rework_of"] == "prd-plan-failed-1"
+        and event.payload["rework_attempt"] == 3
+        for event in events
+    )
+    assert not any(
+        event.type == "zaofu.refactor.review.ready"
+        for event in events
+    )
 
 
 def test_kanban_agent_recovery_actions_fail_closed_before_runtime(

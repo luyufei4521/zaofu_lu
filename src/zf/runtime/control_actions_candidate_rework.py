@@ -279,6 +279,10 @@ class CandidateReworkActionsMixin:
         *,
         requested: ZfEvent,
     ) -> dict[str, Any]:
+        flow_kind = _candidate_rework_flow_kind(
+            payload,
+            state_dir=self.state_dir,
+        )
         scope_payload = _replan_task_scope_payload(
             payload,
             state_dir=self.state_dir,
@@ -308,6 +312,8 @@ class CandidateReworkActionsMixin:
             "idempotency_key": str(payload.get("checkpoint_id") or ""),
             **scope_payload,
         }
+        if flow_kind:
+            event_payload["flow_kind"] = flow_kind
         replan = self.writer.emit(
             "orchestrator.replan_requested",
             actor="zf-cli",
@@ -317,7 +323,7 @@ class CandidateReworkActionsMixin:
         )
         emitted = [replan.id]
         resynth = _build_resynth_event(
-            {**payload, **scope_payload},
+            {**payload, **scope_payload, "flow_kind": flow_kind},
             state_dir=self.state_dir,
             config=self.config or ZfConfig(),
         )
@@ -506,6 +512,48 @@ def _build_resynth_event(
         return build_replan_resynth_event(plan=plan, events=events, config=config)
     except Exception:
         return None
+
+
+def _candidate_rework_flow_kind(
+    payload: dict[str, Any],
+    *,
+    state_dir: Path,
+) -> str:
+    explicit = str(
+        payload.get("flow_kind") or payload.get("request_kind") or ""
+    ).strip().lower()
+    if explicit:
+        return explicit
+
+    try:
+        from zf.runtime.event_window import read_runtime_events
+
+        events = read_runtime_events(
+            EventLog(state_dir / "events.jsonl"),
+            state_dir,
+        )
+    except Exception:
+        events = []
+
+    source_event_id = str(payload.get("source_event_id") or "").strip()
+    source_event_type = str(payload.get("source_event_type") or "").strip()
+    for event in reversed(events):
+        if source_event_id and event.id != source_event_id:
+            continue
+        event_payload = event.payload if isinstance(event.payload, dict) else {}
+        inferred = str(
+            event_payload.get("flow_kind")
+            or event_payload.get("request_kind")
+            or ""
+        ).strip().lower()
+        if inferred:
+            return inferred
+        source_event_type = source_event_type or event.type
+        if source_event_id:
+            break
+
+    prefix = source_event_type.split(".", 1)[0].strip().lower()
+    return prefix if prefix in {"issue", "prd", "refactor"} else ""
 
 
 def _replan_task_scope_payload(

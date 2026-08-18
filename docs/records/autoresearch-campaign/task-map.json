@@ -1,0 +1,106 @@
+{
+  "schema_version": "task-map.v2",
+  "task_id": "TASK-AF11DF",
+  "status": "proposed",
+  "version": 2,
+  "rework_from": "design.critique.done:evt-f5aecf4a7a76",
+  "goal": {
+    "id": "GOAL-STUCK-RECOVERY-001",
+    "claim": "一次受控 worker.stuck 注入后，任务无需手工状态移动即可恢复并完成正常交付闭环",
+    "acceptance_ref": "docs/records/autoresearch-campaign/acceptance-matrix.json"
+  },
+  "source_refs": [
+    "autoresearch-seed.txt",
+    "docs/records/autoresearch-campaign/stuck-recovery-arch-plan.md",
+    "design.critique.done:evt-f5aecf4a7a76"
+  ],
+  "assembly_owner": "orchestrator",
+  "tasks": [
+    {
+      "id": "STUCK-DEV-01",
+      "title": "创建受控卡住恢复运行记录",
+      "owner_role": "dev",
+      "wave": 1,
+      "blocked_by": [],
+      "exclusive_files": ["docs/autoresearch-campaign/stuck-recovery.md"],
+      "acceptance": [
+        "记录为中文且非空",
+        "记录包含 controlled-stuck-recovery 场景与 autoresearch.inject.worker_stuck",
+        "记录包含 worker.stuck -> task.requeued -> worker.stuck.recovered -> 新 task.dispatched 恢复链",
+        "记录包含四项 stuck 指标名称与当前可得值/待 outer post-run 复核说明",
+        "记录包含 review.approved、test.passed、judge.passed、discriminator.passed verdict",
+        "记录包含 .zf/events.jsonl 和具体 event/state refs"
+      ],
+      "verification": "test-matrix:T-01",
+      "verification_owner": "test",
+      "evidence_producer": "dev"
+    },
+    {
+      "id": "STUCK-REVIEW-01",
+      "title": "审查运行记录与恢复证据",
+      "owner_role": "review",
+      "wave": 2,
+      "blocked_by": ["STUCK-DEV-01"],
+      "exclusive_files": [],
+      "acceptance": ["记录内容与 task contract、git diff、当前 event refs 一致"],
+      "verification": "review.approved",
+      "verification_owner": "review",
+      "evidence_producer": "review"
+    },
+    {
+      "id": "STUCK-TEST-01",
+      "title": "执行 stuck/requeue/recovery 确定性验证",
+      "owner_role": "test",
+      "wave": 3,
+      "blocked_by": ["STUCK-REVIEW-01"],
+      "exclusive_files": [],
+      "acceptance": [
+        "T-02/T-03 聚焦测试通过",
+        "T-04 证明 original dispatch/injection/stuck/requeue/recovered/new dispatch 完整因果链",
+        "T-04 的 manual_status_mutation_ids 与 invalid_transition_ids 为空"
+      ],
+      "verification": "test-matrix:T-02,T-03,T-04",
+      "verification_owner": "test",
+      "evidence_producer": "test"
+    },
+    {
+      "id": "STUCK-JUDGE-01",
+      "title": "判定内层正常 review/test/judge 闭环",
+      "owner_role": "judge",
+      "wave": 4,
+      "blocked_by": ["STUCK-TEST-01"],
+      "exclusive_files": [],
+      "acceptance": ["T-05 读取同一 state_dir/cwd 且 refs verify 通过", "review.approved 与 test.passed 已存在", "AC-01 至 AC-05 的 judge 前置证据齐全"],
+      "verification": "test-matrix:T-05 + judge.passed",
+      "verification_owner": "judge",
+      "evidence_producer": "judge"
+    },
+    {
+      "id": "STUCK-GATE-01",
+      "title": "机械证据门签收内层任务",
+      "owner_role": "judge",
+      "owner_kind": "kernel-discriminator",
+      "wave": 5,
+      "blocked_by": ["STUCK-JUDGE-01"],
+      "exclusive_files": [],
+      "acceptance": ["refs/digests 可解析", "无 manual status mutation、invalid transition 或 recovery_failed"],
+      "verification": "discriminator.passed",
+      "verification_owner": "kernel",
+      "evidence_producer": "kernel"
+    }
+  ],
+  "outer_post_run_gate": {
+    "materialize_as_inner_task": false,
+    "owner": "autoresearch-supervisor",
+    "verification": "test-matrix:T-06",
+    "reason": "report.md/events-summary.json 只有 inner runner 退出后生成",
+    "cleanup_owner": "outer-operator"
+  },
+  "rework_routes": {
+    "gate.failed": "arch",
+    "dev.blocked": "orchestrator",
+    "test.failed": "dev",
+    "judge.failed": "orchestrator",
+    "worker.stuck.recovery_failed": "run-manager"
+  }
+}

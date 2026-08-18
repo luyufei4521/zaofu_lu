@@ -1,0 +1,71 @@
+{
+  "schema_version": "acceptance-matrix.v2",
+  "task_id": "TASK-AF11DF",
+  "status": "proposed",
+  "version": 2,
+  "rework_from": "design.critique.done:evt-f5aecf4a7a76",
+  "success_criteria": [
+    "最终中文运行记录满足 T-01 内容检查",
+    "受控 stuck 的原 dispatch、注入、stuck、requeue、recovered、新 dispatch 因果链满足 T-04",
+    "内层 review/test/judge/discriminator 正常完成，外层 runner exit_code=0",
+    "fatal、invalid transition、manual status mutation 均为 0"
+  ],
+  "acceptance": [
+    {
+      "id": "AC-01",
+      "claim": "最终中文运行记录由 dev 生成且内容完整",
+      "owner": "dev",
+      "step": "dev 写 docs/autoresearch-campaign/stuck-recovery.md，包含 scenario、完整恢复链、四项 stuck 指标、review/test/judge/discriminator verdict 与可回查 refs",
+      "verify": "test-matrix:T-01",
+      "evidence": ["docs/autoresearch-campaign/stuck-recovery.md", "dev.build.done"]
+    },
+    {
+      "id": "AC-02",
+      "claim": "恰好一次受控 external stuck 注入命中真实 dispatch",
+      "owner": "test",
+      "step": "对当前 worktree 运行 audit_stuck_incident(required=True)",
+      "verify": "stuck_incident_audit.status == passed; injection origin == external; injection causation == original task.dispatched",
+      "evidence": ["test-matrix:T-04", "src/zf/autoresearch/stuck_incident.py"]
+    },
+    {
+      "id": "AC-03",
+      "claim": "requeue、recovered 与新 dispatch 属于同一 incident 因果链",
+      "owner": "test",
+      "step": "T-04 用 event id/order/task/instance/dispatch/correlation 检查原 dispatch -> injection -> stuck -> task.requeued -> worker.stuck.recovered -> 新 task.dispatched",
+      "verify": "requeue.causation_id == stuck.id；recovered.causation_id == stuck.id；new dispatch task/instance 相同且 dispatch_id 非空并不同；非空 correlation 一致",
+      "evidence": ["test-matrix:T-04", ".zf/events.jsonl"]
+    },
+    {
+      "id": "AC-04",
+      "claim": "恢复后完成正常 review/test/judge/discriminator 流程及外层 runner",
+      "owner": "judge-and-outer-operator",
+      "step": "内层 T-05 核对 review/test 前置 gate，随后 judge 与 kernel discriminator 各自发出 terminal event；runner 退出后外层 T-06 核对 report/events-summary",
+      "verify": "review.approved、test.passed、judge.passed、discriminator.passed 均出现；tasks_done >= 1；runner returncode == 0",
+      "evidence": ["test-matrix:T-05", "test-matrix:T-06"]
+    },
+    {
+      "id": "AC-05",
+      "claim": "无 fatal、invalid transition 或 worker 直接移动 task status",
+      "owner": "discriminator-and-outer-operator",
+      "step": "T-04 扫描当前 ledger，T-06 在 post-run summary 复核",
+      "verify": "manual_status_mutation_count == 0；invalid_transition_count == 0；fatal_count == 0；worker_stuck_recovery_failed_count == 0",
+      "manual_mutation_rule": "event.type == task.status_changed 且 (actor != zf-cli 或 origin == worker) 即计为 manual status mutation",
+      "evidence": ["test-matrix:T-04", "test-matrix:T-06", "events-summary.json"]
+    },
+    {
+      "id": "AC-06",
+      "claim": "arch 交接没有越过实现边界",
+      "owner": "critic",
+      "step": "比较 arch completion payload 与 manifest",
+      "verify": "arch changed_files == []；最终运行记录的 writer 是 dev；arch artifacts status == proposed",
+      "evidence": ["arch.proposal.done", "skill-adapter-plan.json", "task-map.json"]
+    }
+  ],
+  "failure_policy": {
+    "injection_not_satisfied": "标记失败并走受控 rework，不手工置 done",
+    "causality_mismatch": "T-04 exit non-zero；孤立计数不能满足 AC-02/AC-03",
+    "recovery_failed": "保留 fatal evidence，交 orchestrator/run-manager 诊断",
+    "missing_or_incomplete_final_file": "dev 重新实现；arch 不代写",
+    "outer_report_missing": "runner 退出后由 outer operator 判失败，不回填伪造 report ref"
+  }
+}

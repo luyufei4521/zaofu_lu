@@ -1,0 +1,92 @@
+{
+  "schema_version": "test-matrix.v2",
+  "task_id": "TASK-AF11DF",
+  "status": "proposed",
+  "version": 2,
+  "rework_from": "design.critique.done:evt-f5aecf4a7a76",
+  "execution_context": {
+    "working_directory": "/tmp/zaofu-autoresearch-resident/worktrees/rmar-24e159d2370e",
+    "state_dir": "/tmp/zaofu-autoresearch-resident/worktrees/rmar-24e159d2370e/.zf",
+    "outer_run_dir": "/home/uisee/zaofu_projects/loshu_zaofu_dev2/.zf-loshu_zaofu_dev2/autoresearch/resident/rmar-24e159d2370e/runs/loop-001-controlled-stuck-recovery-20260818T091520",
+    "provider_tier": "current run is real-provider/host and was started externally with --confirm; inner roles must not launch another provider run"
+  },
+  "tiers": [
+    {
+      "id": "T-01",
+      "domain": "artifact-content",
+      "owner": "dev-and-test",
+      "tier": "deterministic",
+      "command": "PYTHONPATH=src python3 -c 'from pathlib import Path; p=Path(\"docs/autoresearch-campaign/stuck-recovery.md\"); text=p.read_text(encoding=\"utf-8\"); required=(\"controlled-stuck-recovery\",\"autoresearch.inject.worker_stuck\",\"worker.stuck\",\"task.requeued\",\"worker.stuck.recovered\",\"task.dispatched\",\"stuck_injection_requested_count\",\"worker_stuck_count\",\"worker_stuck_recovered_count\",\"worker_stuck_recovery_failed_count\",\"review.approved\",\"test.passed\",\"judge.passed\",\"discriminator.passed\",\".zf/events.jsonl\"); missing=[item for item in required if item not in text]; assert p.is_file() and text.strip() and not missing, missing'",
+      "purpose": "验证最终运行记录存在、非空，并覆盖场景、完整恢复链、四项指标、verdict 与 ledger ref",
+      "pass": "exit_code=0"
+    },
+    {
+      "id": "T-02",
+      "domain": "stuck-unit",
+      "owner": "test",
+      "tier": "deterministic",
+      "command": "uv run pytest tests/test_autoresearch_stuck_incident.py tests/test_stuck_dedup.py tests/test_stuck_detection_integration.py -q --no-cov",
+      "purpose": "覆盖注入、去重、检测和 recovery-failed 分类",
+      "pass": "所有测试通过"
+    },
+    {
+      "id": "T-03",
+      "domain": "orchestration",
+      "owner": "test",
+      "tier": "deterministic",
+      "command": "uv run pytest tests/test_runtime_self_recovery_closures.py tests/test_run_manager.py tests/test_autoresearch_orchestrator.py tests/test_cli_autoresearch.py -q --no-cov",
+      "purpose": "覆盖 requeue、重新派发、外层注入参数和 summary 汇总",
+      "pass": "所有测试通过"
+    },
+    {
+      "id": "T-04",
+      "domain": "current-run-causality",
+      "owner": "test",
+      "tier": "deterministic-current-run",
+      "command": "PYTHONPATH=src python3 -c 'from zf.autoresearch.stuck_incident import audit_stuck_incident,read_worktree_events; from pathlib import Path; events=read_worktree_events(Path.cwd()); audit=audit_stuck_incident(events,required=True); pos={e.id:i for i,e in enumerate(events)}; stuck=next((e for e in events if e.id==audit.stuck_event_id),None); requeue=next((e for e in events if stuck and e.type==\"task.requeued\" and e.task_id==audit.task_id and e.causation_id==stuck.id and str(e.payload.get(\"dispatch_id\") or \"\")==audit.dispatch_id),None); recovered=next((e for e in events if e.id==audit.recovery_event_id),None); redispatch=next((e for e in events if recovered and e.type==\"task.dispatched\" and e.task_id==audit.task_id and pos[e.id]>pos[recovered.id] and str(e.payload.get(\"dispatch_id\") or \"\") and str(e.payload.get(\"dispatch_id\") or \"\")!=audit.dispatch_id and str(e.payload.get(\"assignee\") or \"\")==audit.instance_id),None); correlation_ok=bool(stuck and recovered and redispatch) and (not stuck.correlation_id or (recovered.correlation_id==stuck.correlation_id and redispatch.correlation_id==stuck.correlation_id)); manual=[e.id for e in events if e.type==\"task.status_changed\" and (e.actor!=\"zf-cli\" or e.origin==\"worker\")]; invalid=[e.id for e in events if e.type==\"task.invalid_transition\"]; order_ok=bool(requeue and recovered and redispatch) and pos[requeue.id]<pos[recovered.id]<pos[redispatch.id]; result={\"audit\":audit.to_dict(),\"requeue_event_id\":requeue.id if requeue else \"\",\"redispatch_event_id\":redispatch.id if redispatch else \"\",\"order_ok\":order_ok,\"correlation_ok\":correlation_ok,\"manual_status_mutation_ids\":manual,\"invalid_transition_ids\":invalid}; print(result); assert audit.ok and order_ok and correlation_ok and not manual and not invalid, result'",
+      "purpose": "证明原 dispatch/injection/stuck、requeue/recovered 与不同的新 dispatch 属于同 task/instance/correlation incident，并扫描 manual mutation",
+      "pass": "audit.ok、order_ok、correlation_ok 为 true；manual_status_mutation_ids 与 invalid_transition_ids 为空"
+    },
+    {
+      "id": "T-05",
+      "domain": "inner-pre-judge-evidence",
+      "owner": "judge",
+      "tier": "deterministic-current-run",
+      "commands": [
+        "/home/uisee/zaofu/.venv/bin/zf events --last 240 --state-dir /tmp/zaofu-autoresearch-resident/worktrees/rmar-24e159d2370e/.zf",
+        "cd /tmp/zaofu-autoresearch-resident/worktrees/rmar-24e159d2370e && /home/uisee/zaofu/.venv/bin/zf refs verify"
+      ],
+      "purpose": "从同一 run 的 state_dir/cwd 回查恢复链、artifact refs 与 judge 的前置 gate events",
+      "pass": "refs verify exit_code=0；ledger 中存在 review.approved、test.passed；judge 随后独立 emit judge.passed，kernel discriminator 再消费该事件"
+    },
+    {
+      "id": "T-06",
+      "domain": "outer-real-provider-post-run",
+      "owner": "outer-operator",
+      "tier": "real-provider-host-post-run",
+      "precondition": "inner tests/judge/discriminator 已完成且 tests.e2e.run_mixed 已退出",
+      "commands": [
+        "test -f /home/uisee/zaofu_projects/loshu_zaofu_dev2/.zf-loshu_zaofu_dev2/autoresearch/resident/rmar-24e159d2370e/runs/loop-001-controlled-stuck-recovery-20260818T091520/report.md",
+        "test -f /home/uisee/zaofu_projects/loshu_zaofu_dev2/.zf-loshu_zaofu_dev2/autoresearch/resident/rmar-24e159d2370e/runs/loop-001-controlled-stuck-recovery-20260818T091520/events-summary.json",
+        "python3 -m json.tool /home/uisee/zaofu_projects/loshu_zaofu_dev2/.zf-loshu_zaofu_dev2/autoresearch/resident/rmar-24e159d2370e/runs/loop-001-controlled-stuck-recovery-20260818T091520/events-summary.json"
+      ],
+      "purpose": "在 runner 退出后验证同一 real-provider run 的最终 report、summary 和 resolved output paths",
+      "pass": "tasks_done >= 1、returncode=0、fatal_count=0、stuck_injection_satisfied=true、invalid_transition_count=0、worker_stuck_recovery_failed_count=0"
+    }
+  ],
+  "cleanup": {
+    "owner": "outer-operator",
+    "when": "T-06 证据已归档后",
+    "commands": [
+      "cd /tmp/zaofu-autoresearch-resident/worktrees/rmar-24e159d2370e && /home/uisee/zaofu/.venv/bin/zf stop",
+      "tmux kill-session -t zf-autoresearch-loop-001-controlled-stuck-recovery-20260818T091520"
+    ],
+    "note": "当前 worktree 含本 run 交付和外层证据，是否移除由 resident owner 决定；内层 worker 不强制删除。"
+  },
+  "scope_notes": [
+    "arch 不运行 T-02 至 T-06，也不代替 test/judge 宣布通过。",
+    "T-04/T-05 使用当前 run，不带 --confirm、不启动 provider；T-06 是外层已启动 real-provider run 的 post-run 检查。",
+    "report.md/events-summary.json 在 inner runner 退出后才生成，因此 T-06 不得作为内层 worker completion 的伪造前置证据。",
+    "完整 pytest 不是本设计阶段默认要求；真实 provider/host 结果必须单独标注。"
+  ]
+}

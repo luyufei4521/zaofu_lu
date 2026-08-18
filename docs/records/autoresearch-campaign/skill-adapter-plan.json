@@ -1,0 +1,85 @@
+{
+  "schema_version": "skill-adapter-plan.v2",
+  "task_id": "TASK-AF11DF",
+  "status": "proposed",
+  "version": 2,
+  "rework_from": "design.critique.done:evt-f5aecf4a7a76",
+  "source_refs": [
+    "autoresearch-seed.txt",
+    "docs/manual/autoresearch-orchestrator.md",
+    "docs/manual/10-autoresearch-usage.md",
+    "skills/zf-harness-instruction-hygiene/SKILL.md"
+  ],
+  "control_plane": "zf.yaml",
+  "roles": [
+    {
+      "role": "arch",
+      "mode": "reader",
+      "method": [
+        "把空语义源与可追溯运行手册明确分开",
+        "产出 proposed 计划工件和事件/证据契约",
+        "不改实现、不写最终运行记录"
+      ],
+      "allowed_outputs": [
+        "docs/records/autoresearch-campaign/stuck-recovery-arch-plan.md",
+        "docs/records/autoresearch-campaign/skill-adapter-plan.json",
+        "docs/records/autoresearch-campaign/acceptance-matrix.json",
+        "docs/records/autoresearch-campaign/test-matrix.json",
+        "docs/records/autoresearch-campaign/task-map.json"
+      ],
+      "verification_owner": "arch",
+      "skill_status": {
+        "zf-harness-instruction-hygiene": "resolved",
+        "spec-driven-development": "missing",
+        "api-and-interface-design": "missing",
+        "documentation-and-adrs": "missing",
+        "source-driven-development": "missing"
+      }
+    },
+    {
+      "role": "critic",
+      "mode": "reader",
+      "method": [
+        "只评审四个工件的一致性、scope 和证据可得性",
+        "不运行 full verification，不创建最终记录"
+      ],
+      "allowed_outputs": ["design.critique.done", "gate.failed"],
+      "verification_owner": "critic"
+    },
+    {
+      "role": "dev",
+      "mode": "writer",
+      "method": [
+        "只写 docs/autoresearch-campaign/stuck-recovery.md",
+        "通过 sanctioned event/action 报告事实，不直接改 canonical state",
+        "若收到 requeue，沿新 attempt/dispatch token 继续，不手工宣告 done",
+        "最终记录必须包含 T-01 声明的全部内容与可回查 refs"
+      ],
+      "allowed_outputs": ["docs/autoresearch-campaign/stuck-recovery.md", "dev.build.done"],
+      "verification_owner": "dev"
+    },
+    {
+      "role": "review/test/judge",
+      "mode": "reader",
+      "method": [
+        "读取 task contract、工件 refs、events summary 和 git evidence",
+        "按 acceptance/test matrix 产出各自 verdict",
+        "test 运行 current-run deterministic checker；judge 不递归启动 provider run"
+      ],
+      "allowed_outputs": ["review.approved", "test.passed", "judge.passed"],
+      "verification_owner": "downstream-gates"
+    }
+  ],
+  "forbidden_shortcuts": [
+    "直接写 .zf/events.jsonl、kanban.json 或 feature_list.json",
+    "由 arch 创建或替 dev 修改 docs/autoresearch-campaign/stuck-recovery.md",
+    "把 worker 文本、tmux pane 或单个 done 状态当作 recovery 证据",
+    "为了让测试通过而修改现有 zf.yaml 脏改动",
+    "在当前 real-provider run 内再次执行 autoresearch --confirm"
+  ],
+  "evidence_producers": {
+    "inner_flow": "test-matrix:T-01,T-02,T-03,T-04,T-05",
+    "outer_real_provider": "test-matrix:T-06",
+    "manual_mutation_rule": "task.status_changed actor==zf-cli and origin!=worker; task.invalid_transition count==0"
+  }
+}

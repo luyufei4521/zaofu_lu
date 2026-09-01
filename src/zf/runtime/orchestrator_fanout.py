@@ -37,6 +37,10 @@ from zf.runtime.fanout_failure_findings import (
     findings_from_payload,
 )
 from zf.runtime.fanout_result_identity import bind_blocking_writer_result_identity
+from zf.runtime.fanout_retry_support import (
+    emit_fanout_retry_dispatch_failure,
+    prepare_reader_retry_source_payload,
+)
 from zf.runtime.fanout_retrigger_guard import (
     suppress_completed_generation,
     suppress_stale_task_pipeline_generation,
@@ -6871,80 +6875,16 @@ class FanoutCoordinationMixin(
                 run_id=run_id,
             )
             identity_sources = (child, manifest, prepared_call)
-        # Reader retries receive a new attempt id.  The retry briefing asks
-        # the worker to consume that attempt's immutable source manifest, so
-        # materialize it before handing the task to the transport.  The
-        # original dispatch path already creates this sidecar; historically
-        # the retry path only changed the id and left the sidecar absent,
-        # causing every recovered reader to fail closed at `zf artifact read`.
-        retry_source_manifest: dict[str, Any] | None = None
-        retry_source_descriptor: dict[str, Any] | None = None
+        retry_source_payload: dict[str, Any] = {}
         if not writer_retry:
-            try:
-                from zf.runtime.artifact_read_ledger import source_manifest_from_payload
-
-                child_payload = child.get("payload")
-                manifest_payload: dict[str, Any] = (
-                    dict(child_payload) if isinstance(child_payload, dict) else {}
-                )
-                manifest_payload.update(
-                    {
-                        "task_id": task_id,
-                        "workflow_run_id": str(
-                            manifest_payload.get("workflow_run_id")
-                            or manifest.get("trace_id")
-                            or ""
-                        ),
-                        "target_ref": str(
-                            child.get("target_ref") or manifest.get("target_ref") or ""
-                        ),
-                    }
-                )
-                retry_source_manifest, retry_source_descriptor = (
-                    source_manifest_from_payload(
-                        state_dir=self.state_dir,
-                        project_root=self.project_root,
-                        payload=manifest_payload,
-                        workflow_run_id=str(
-                            manifest_payload.get("workflow_run_id") or ""
-                        ),
-                        task_id=task_id,
-                        attempt_id=run_id,
-                        dispatch_id=run_id,
-                        source_event_id=previous_dispatch.id,
-                        manifest_metadata={
-                            "retry_of_run_id": str(
-                                previous_dispatch.payload.get("run_id") or ""
-                            ),
-                            "retry_attempt": attempt,
-                        },
-                    )
-                )
-            except Exception as exc:
-                self.event_writer.append(
-                    ZfEvent(
-                        type="fanout.child.failed",
-                        actor="zf-cli",
-                        payload={
-                            "fanout_id": fanout_id,
-                            "trace_id": trace_id,
-                            "stage_id": stage_id,
-                            "child_id": child_id,
-                            "run_id": run_id,
-                            "role_instance": role.instance_id,
-                            "task_id": task_id,
-                            "retry_of_run_id": str(
-                                previous_dispatch.payload.get("run_id") or ""
-                            ),
-                            "attempt": attempt + 1,
-                            "reason": f"retry source manifest preparation failed: {exc}",
-                            "failure_kind": "artifact_read",
-                        },
-                        causation_id=previous_dispatch.id,
-                        correlation_id=trace_id,
-                    )
-                )
+            prepared_source = prepare_reader_retry_source_payload(
+                self.state_dir, self.project_root, self.event_writer,
+                manifest, child, role.instance_id, run_id, attempt,
+                previous_dispatch,
+            )
+            if prepared_source is None:
                 return False
+            retry_source_payload = prepared_source
         prompt = build_task_prompt(
             role.instance_id,
             briefing_path,
@@ -6982,32 +6922,10 @@ class FanoutCoordinationMixin(
             )
             return False
         except Exception as exc:
-            # ZF-E2E-PRDCTL-P0-1: the primary dispatch path already converts
-            # send failures (incl. BudgetExceededError) into
-            # fanout.child.failed; the retry path let them propagate and kill
-            # the reactor turn.
-            failure_payload = {
-                "fanout_id": fanout_id,
-                "trace_id": trace_id,
-                "stage_id": stage_id,
-                "child_id": child_id,
-                "run_id": run_id,
-                "role_instance": role.instance_id,
-                "task_id": str(child.get("task_id") or ""),
-                "retry_of_run_id": str(previous_dispatch.payload.get("run_id") or ""),
-                "attempt": attempt + 1,
-                "reason": str(exc),
-            }
-            retry_failure_kind = classify_dispatch_exception(exc)
-            if retry_failure_kind:
-                failure_payload["failure_kind"] = retry_failure_kind
-            self.event_writer.append(ZfEvent(
-                type="fanout.child.failed",
-                actor="zf-cli",
-                payload=failure_payload,
-                causation_id=previous_dispatch.id,
-                correlation_id=trace_id,
-            ))
+            emit_fanout_retry_dispatch_failure(
+                self.event_writer, manifest, child, role.instance_id,
+                run_id, attempt, previous_dispatch, exc,
+            )
             return False
         payload = {
             "fanout_id": fanout_id,
@@ -7032,22 +6950,7 @@ class FanoutCoordinationMixin(
             payload["payload"] = dict(task_item)
         elif isinstance(child_payload, dict) and child_payload:
             payload["payload"] = dict(child_payload)
-        if retry_source_manifest is not None and retry_source_descriptor is not None:
-            payload["attempt_source_manifest_ref"] = str(
-                retry_source_descriptor.get("ref") or ""
-            )
-            payload["attempt_source_manifest_digest"] = str(
-                retry_source_descriptor.get("sha256") or ""
-            )
-            payload["attempt_source_manifest"] = dict(retry_source_descriptor)
-            for key in (
-                "required_reads",
-                "input_consumption_policy",
-                "input_consumption_policy_ref",
-                "input_consumption_policy_digest",
-            ):
-                if key in retry_source_manifest:
-                    payload[key] = retry_source_manifest[key]
+        payload.update(retry_source_payload)
         if writer_retry:
             for key in _CONTRACT_HANDOFF_KEYS:
                 value = operation_payload.get(key)

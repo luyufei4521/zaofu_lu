@@ -116,25 +116,32 @@ def resolve_writer_owner(
     raw_instance = str(owner_instance or "").strip()
 
     def match(value: str, roles: list[Any]) -> Any | None:
+        candidates = _identity_candidates(value)
         return next((
             role for role in roles
-            if value in {
+            if any(candidate in {
                 str(getattr(role, "name", "") or ""),
                 str(getattr(role, "instance_id", "") or ""),
-            }
+            } for candidate in candidates)
+            ), None)
+
+    def match_instance(value: str, roles: list[Any]) -> Any | None:
+        candidates = _identity_candidates(value)
+        return next((
+            role for role in roles
+            if any(
+                candidate == str(getattr(role, "instance_id", "") or "")
+                for candidate in candidates
+            )
         ), None)
 
     if raw_instance:
-        matched = next((
-            role for role in closure
-            if str(getattr(role, "instance_id", "") or "") == raw_instance
-        ), None)
+        matched = match_instance(raw_instance, closure)
         if matched is None:
             code = (
                 "flow_owner_cross_flow"
                 if any(
-                    str(getattr(role, "instance_id", "") or "")
-                    == raw_instance
+                    match_instance(raw_instance, [role]) is not None
                     for role in all_roles
                 )
                 else "flow_owner_instance_unknown"
@@ -150,7 +157,11 @@ def resolve_writer_owner(
                 str(getattr(matched, "instance_id", "") or ""),
             }
             role_match = match(raw_role, closure)
-            if raw_role not in matched_identity and role_match is not None:
+            if (
+                raw_role not in matched_identity
+                and role_match is not None
+                and role_match is not matched
+            ):
                 raise FlowRoleBindingError(
                     "flow_owner_identity_mismatch",
                     f"owner_role {raw_role!r} and owner_instance "
@@ -208,3 +219,11 @@ __all__ = [
     "role_configs_for_flow",
     "writer_role_configs_for_flow",
 ]
+
+
+def _identity_candidates(value: str) -> tuple[str, ...]:
+    """Return exact identity plus the bounded legacy PRD alias."""
+    value = str(value or "").strip()
+    if value.startswith("prd-"):
+        return (value, value[4:])
+    return (value,)

@@ -31,13 +31,16 @@ def validate_task_contract(
 
     role_names = {role.name for role in config.roles}
     instance_ids = {role.instance_id for role in config.roles}
-    if contract.owner_instance and contract.owner_instance not in instance_ids:
+    if contract.owner_instance and not _configured_identity(
+        contract.owner_instance,
+        instance_ids,
+    ):
         errors.append(
             f"{prefix}.owner_instance {contract.owner_instance!r} does not match a role instance"
         )
     if (
         contract.owner_role
-        and contract.owner_role not in role_names
+        and not _configured_identity(contract.owner_role, role_names)
         and not _allows_semantic_owner_role(task, config)
     ):
         errors.append(
@@ -59,7 +62,7 @@ def validate_task_contract(
     ):
         errors.append(f"{prefix}.owner_role or owner_instance is required")
 
-    if contract.rework_to and contract.rework_to not in role_names:
+    if contract.rework_to and not _configured_identity(contract.rework_to, role_names):
         errors.append(f"{prefix}.rework_to {contract.rework_to!r} does not match a role")
 
     if _task_requires_source_precedence(task, config) and not _has_source_precedence_ref(task):
@@ -167,7 +170,7 @@ def _role_name_from_instance(instance_id: str, config: ZfConfig) -> str:
     if not instance_id:
         return ""
     for role in config.roles:
-        if role.instance_id == instance_id:
+        if _configured_identity(instance_id, {role.instance_id}):
             return role.name
     return ""
 
@@ -176,7 +179,7 @@ def _role_name_from_role_or_instance(value: str, config: ZfConfig) -> str:
     if not value:
         return ""
     for role in config.roles:
-        if role.name == value:
+        if _configured_identity(value, {role.name}):
             return role.name
     return _role_name_from_instance(value, config)
 
@@ -184,7 +187,21 @@ def _role_name_from_role_or_instance(value: str, config: ZfConfig) -> str:
 def _is_role_name(value: str | None, config: ZfConfig) -> bool:
     if not value:
         return False
-    return any(role.name == value for role in config.roles)
+    return any(_configured_identity(value, {role.name}) for role in config.roles)
+
+
+def _configured_identity(value: str, identities: set[str]) -> bool:
+    """Accept one historical PRD role prefix only when its target exists.
+
+    Older generated PRD task maps used identities such as
+    ``prd-dev-lane-0``.  Current flow profiles use ``dev-lane-0``.  Keep
+    existing terminal tasks admissible across that rename without accepting
+    arbitrary or unknown role names.
+    """
+    value = str(value or "").strip()
+    if value in identities:
+        return True
+    return value.startswith("prd-") and value[4:] in identities
 
 
 def _allows_semantic_owner_role(task: Task, config: ZfConfig) -> bool:

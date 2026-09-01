@@ -3781,9 +3781,17 @@ def create_app(
         except Exception:
             pass
 
-    threading.Thread(
-        target=_prewarm_recent_projects, name="zf-web-prewarm", daemon=True,
-    ).start()
+    # Large historical event archives can make the optional prewarm exceed the
+    # host memory budget before the first page is served.  Keep prewarm
+    # available for ordinary projects, but allow operators to disable it for
+    # a memory-constrained live project; snapshots remain demand-driven.
+    prewarm_enabled = str(
+        os.environ.get("ZF_WEB_PREWARM", "1")
+    ).strip().lower() not in {"0", "false", "off", "no"}
+    if prewarm_enabled:
+        threading.Thread(
+            target=_prewarm_recent_projects, name="zf-web-prewarm", daemon=True,
+        ).start()
 
     return app
 

@@ -39,6 +39,11 @@ from zf.core.events.log import EventLog
 from zf.core.events.model import ZfEvent
 from zf.core.events.writer import EventWriter
 from zf.core.state.role_sessions import RoleSessionRegistry
+from zf.cli.hook_event_tail import (
+    completed_tail_quiesced as _completed_tail_quiesced,
+    orphan_already_recorded as _orphan_already_recorded,
+    read_active_event_tail as _read_active_event_tail,
+)
 from zf.cli.hook_workdir_guard import (
     actor_from_workdir_cwd as _actor_from_workdir_cwd,
     bash_command_looks_mutating as _bash_command_looks_mutating,
@@ -314,12 +319,6 @@ def _resolve_causation(
                 if _synth_dispatch_is_active(events, cached):
                     return cached.id
                 return _latest_active_dispatch_for_actor(events, actor)
-    # Hook subprocesses are short-lived, so the in-memory EventIndex usually
-    # has no event bodies after loading its persisted id maps.  Do not make
-    # every Pre/PostToolUse hook decode all historical archives (a Loshu log
-    # can be hundreds of MB): current dispatches are in the active segment.
-    # Only fall back to the canonical full scan when the bounded active tail
-    # cannot establish a dispatch (for example after an archive rotation).
     try:
         recent = _read_active_event_tail(event_log)
         active = _latest_active_dispatch_for_actor(recent, actor)
@@ -327,45 +326,9 @@ def _resolve_causation(
             return active
     except Exception:
         pass
-    # Do not fall back to materialising every archived segment here.  Hooks
-    # are short-lived and can arrive hundreds of times per worker turn; a
-    # long-running project may have hundreds of MB of immutable archives, so
-    # that fallback turns routine telemetry into an O(N) memory/CPU spike.
-    # Missing causation is safe (the event remains observable); the next
-    # dispatch/active-tail sample will restore the binding.
+    # Missing causation stays observable and is safer than an unbounded replay
+    # of immutable archives for every short-lived provider hook.
     return None
-
-
-def _read_active_event_tail(
-    event_log: EventLog,
-    *,
-    max_bytes: int = 8 * 1024 * 1024,
-) -> list[ZfEvent]:
-    """Decode a bounded tail of the active segment for hook causation.
-
-    ``events.jsonl`` is append-only and the active segment contains the
-    current worker dispatches.  Keeping this read bounded prevents a
-    short-lived hook process from materialising every historical archive.
-    The first partial line is discarded; callers fall back to ``read_all``
-    when the tail is insufficient.
-    """
-    path = event_log.path
-    size = path.stat().st_size
-    start = max(0, size - max(int(max_bytes), 64 * 1024))
-    with path.open("rb") as handle:
-        handle.seek(start)
-        raw = handle.read()
-    if start:
-        newline = raw.find(b"\n")
-        if newline < 0:
-            return []
-        raw = raw[newline + 1 :]
-    events: list[ZfEvent] = []
-    for line in raw.splitlines():
-        event = event_log.decode_line(line.decode("utf-8", "replace"))
-        if event is not None:
-            events.append(event)
-    return events
 
 
 def _hook_context_state(
@@ -383,23 +346,6 @@ def _hook_context_state(
     if actor in _ORCHESTRATOR_ACTORS:
         return "control_plane"
     return "bound_idle"
-
-
-def _orphan_already_recorded(event_log: EventLog, *, session_id: str) -> bool:
-    if not session_id:
-        return False
-    try:
-        # Orphan dedupe is best-effort.  Keep it bounded to the active segment
-        # so an unresolved hook cannot force a full historical archive decode.
-        for event in reversed(_read_active_event_tail(event_log)):
-            if event.type != "hook.orphan_event":
-                continue
-            payload = event.payload if isinstance(event.payload, dict) else {}
-            if str(payload.get("session_id") or "") == session_id:
-                return True
-    except Exception:
-        return False
-    return False
 
 
 def _latest_active_dispatch_for_actor(
@@ -1050,15 +996,3 @@ def run(args: argparse.Namespace) -> int:
             return 0
 
     return 0
-
-
-def _completed_tail_quiesced(event_log: EventLog) -> bool:
-    try:
-        from zf.autoresearch.failure_signals import completed_run_quiesced
-
-        # Stop hooks are the only callers.  Keep the probe bounded to the
-        # active segment; replaying immutable archives here can allocate
-        # hundreds of MB for a single provider stop callback.
-        return completed_run_quiesced(_read_active_event_tail(event_log))
-    except Exception:
-        return False

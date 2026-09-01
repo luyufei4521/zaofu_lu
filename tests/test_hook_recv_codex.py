@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from zf.cli.hook_workdir_guard import bash_command_looks_mutating
-from zf.cli.hook_recv import run as hook_recv_run
+from zf.cli.hook_recv import _read_active_event_tail, run as hook_recv_run
 from zf.core.events.log import EventLog
 from zf.core.events.model import ZfEvent
 from zf.core.events.writer import EventWriter
@@ -40,6 +40,25 @@ def _invoke(state_dir: Path, event: str, backend: str, payload: dict,
         backend=backend,
     )
     return hook_recv_run(args)
+
+
+def test_active_event_tail_is_bounded_and_keeps_complete_latest_events(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    for sequence in range(500):
+        log.append(ZfEvent(
+            type="worker.activity",
+            actor="dev-1",
+            payload={"sequence": sequence, "padding": "x" * 256},
+        ))
+
+    events = _read_active_event_tail(log, max_bytes=64 * 1024)
+
+    assert events
+    assert events[-1].payload["sequence"] == 499
+    assert events[0].payload["sequence"] > 0
+    assert len(events) < 500
 
 
 def test_controlled_zf_json_payload_is_not_shell_mutation() -> None:

@@ -10,7 +10,7 @@ from zf.core.events.log import EventLog
 from zf.core.events.model import ZfEvent
 from zf.core.events.writer import EventWriter
 from zf.core.task.schema import Task
-from zf.core.task.store import TERMINAL_STATES, TaskStore
+from zf.core.task.store import TaskStore
 from zf.runtime.run_admission import (
     RUN_TERMINAL_EVENT_TYPES,
     build_run_admission_projection,
@@ -173,8 +173,7 @@ def task_request_binding_decision(
         run_id=str(request_projection.get("run_id") or request_id),
     )
     if (
-        task.status in TERMINAL_STATES
-        or not rotation
+        not rotation
         or request_id == task_request["request_id"]
         or bool(new_admission.get("status"))
         or origin_digest != rotation.get("origin_binding_digest")
@@ -261,6 +260,21 @@ def apply_task_request_binding(
                 rotation.get("prior_terminal_type") or ""
             ),
         },
+        # A cancelled/done Task is archived by TaskStore.  A proven terminal
+        # Request rotation is the one controlled path that may reopen that
+        # same Task for a fresh generation; keep it non-terminal until the
+        # subsequent workflow.invoke.accepted activation.
+        task_updates=(
+            {
+                "status": "backlog",
+                "blocked_reason": "",
+                "assigned_to": "",
+                "active_dispatch_id": "",
+            }
+            if rotation
+            else None
+        ),
+        reopen_terminal=bool(rotation),
     )
     return decision
 

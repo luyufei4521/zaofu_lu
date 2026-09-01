@@ -205,13 +205,19 @@ class TaskStore:
         index = self._load_terminal_index()
         date = index.get(task_id)
         if date is not None:
-            for d in self._load_archive_file(self._archive_file(date)):
+            # A terminal task can have more than one archived generation when
+            # a controlled workflow rotation reopens it and later terminalizes
+            # it again.  The last record is the current canonical snapshot;
+            # returning the first one can hand CAS callers a stale authority
+            # revision even though compare_and_update_contract correctly uses
+            # the newest archived record.
+            for d in reversed(self._load_archive_file(self._archive_file(date))):
                 if d.get("id") == task_id:
                     return self._to_task(d)
         # Final fallback: scan every archive file (handles orphaned records
         # whose index entry was lost).
-        for f in list_archives(self._archive_dir, suffix=".json"):
-            for d in self._load_archive_file(f):
+        for f in reversed(list_archives(self._archive_dir, suffix=".json")):
+            for d in reversed(self._load_archive_file(f)):
                 if d.get("id") == task_id:
                     return self._to_task(d)
         return None

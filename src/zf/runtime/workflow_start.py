@@ -371,6 +371,7 @@ class WorkflowStartService:
                     task,
                     task_contract_digest=task_digest,
                     prior_binding=prior_binding,
+                    fresh_request=bool(terminal_rotation),
                 )
             except ValueError as exc:
                 return _failure(

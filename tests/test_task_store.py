@@ -144,3 +144,22 @@ def test_persistence_across_instances(tmp_path: Path):
     store2 = TaskStore(path)
     assert len(store2.list_all()) == 1
     assert store2.list_all()[0].title == "Persist me"
+
+
+def test_get_terminal_task_returns_latest_archived_generation(tmp_path: Path):
+    """Workflow rotations must not reload an older duplicate archive row."""
+    store = TaskStore(tmp_path / "kanban.json")
+    original = store.add(Task(id="TASK-ARCHIVE-GENERATION", title="old"))
+    store.update(original.id, status="done")
+
+    reopened = Task(
+        id=original.id,
+        title="new",
+        status="backlog",
+    )
+    store.reopen(reopened)
+    store.update(reopened.id, status="done")
+
+    current = store.get(original.id)
+    assert current is not None
+    assert current.title == "new"

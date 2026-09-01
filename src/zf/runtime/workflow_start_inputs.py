@@ -98,6 +98,7 @@ def prepare_approved_workflow_start(
                 normalized.get("task_contract_digest") or ""
             ),
             prior_binding=normalized["task_input_binding"],
+            fresh_request=bool(normalized.get("fresh_request")),
         )
 
     common_payload = {

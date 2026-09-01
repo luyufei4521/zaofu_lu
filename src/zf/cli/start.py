@@ -667,9 +667,31 @@ def _run_startup_orchestrator_catchup(orchestrator, event_log) -> None:
     durable-offset path once during startup so events written while a prior
     watcher was down are consumed immediately instead of waiting for a later
     tick or a manual recovery.
+
+    When a durable backlog exists, pass that bounded delta directly to the
+    coordinator.  Calling the idle (periodic) path for the delta performs
+    history-wide recovery/projection sweeps before the watcher can consume a
+    newly accepted workflow invoke, which can starve startup on large ledgers.
+    Keep the idle path for an empty delta so the normal periodic maintenance
+    contract is unchanged.
     """
     try:
-        _run_orchestrator_idle_tick(orchestrator)
+        load_offset = getattr(orchestrator, "_load_offset", None)
+        read_from_offset = getattr(event_log, "read_from_offset", None)
+        if callable(load_offset) and callable(read_from_offset):
+            offset = int(load_offset())
+            pending, new_offset = read_from_offset(offset)
+            if pending:
+                orchestrator.run_once(
+                    events=list(pending),
+                    consumed_offset=new_offset,
+                )
+            else:
+                _run_orchestrator_idle_tick(orchestrator)
+        else:
+            # Keep lightweight fakes and legacy adapters on the original
+            # durable-offset path when they do not expose the cursor reader.
+            _run_orchestrator_idle_tick(orchestrator)
     except Exception as exc:
         try:
             event_log.append(ZfEvent(

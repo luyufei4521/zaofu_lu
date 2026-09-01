@@ -15,6 +15,22 @@ TASK_INPUT_CONTRACT_SCHEMA_VERSION = "task-workflow-input-contract.v1"
 TASK_INPUT_BINDING_SCHEMA_VERSION = "task-workflow-input-binding.v1"
 _CONTROL_PARAMETER_KEYS = frozenset({"request_id", "request_revision"})
 
+# Outputs of a previous delivery plan must not become inputs to a fresh
+# Workflow Request when a terminal Task is safely rotated.  Keeping these
+# refs causes the next plan/discovery stage to admit an obsolete package.
+_FRESH_REQUEST_PLAN_FIELDS = frozenset({
+    "plan_ref",
+    "source_index_ref",
+    "product_contract_ref",
+})
+_FRESH_REQUEST_EVIDENCE_REF_FIELDS = frozenset({
+    "task_map_ref",
+    "source_index_ref",
+    "plan_artifact_package_id",
+    "plan_artifact_package_ref",
+    "plan_artifact_package_digest",
+})
+
 
 class TaskWorkflowInputCoverageError(ValueError):
     """Raised when a Task-bound Workflow loses canonical contract inputs."""
@@ -42,12 +58,14 @@ def bind_task_workflow_inputs(
     *,
     task_contract_digest: str,
     prior_binding: Mapping[str, Any] | None = None,
+    fresh_request: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Compile Task defaults, explicit overrides, and immutable input identity."""
 
     input_contract = build_task_workflow_input_contract(
         workflow_task,
         task_contract_digest=task_contract_digest,
+        fresh_request=fresh_request,
     )
     input_contract_digest = task_workflow_input_contract_digest(input_contract)
     evidence_digest = _digest(input_contract["evidence_contract"])
@@ -160,26 +178,62 @@ def build_task_workflow_input_contract(
     workflow_task: Any,
     *,
     task_contract_digest: str,
+    fresh_request: bool = False,
 ) -> dict[str, Any]:
     contract = workflow_task.contract
+    contract_values = {
+        field: getattr(contract, field)
+        for field in (
+            "source_ref",
+            "spec_ref",
+            "source_index_ref",
+            "product_contract_ref",
+            "handoff_artifacts",
+            "acceptance_criteria",
+            "acceptance",
+            "scope",
+            "exclusions",
+            "explicit_non_goals",
+            "unknowns",
+            "evidence_contract",
+        )
+    }
+    if fresh_request:
+        contract_values["source_index_ref"] = ""
+        contract_values["product_contract_ref"] = ""
+        evidence = contract_values["evidence_contract"]
+        evidence = dict(evidence) if isinstance(evidence, dict) else {}
+        filtered_evidence = {
+            key: value
+            for key, value in evidence.items()
+            if key not in _FRESH_REQUEST_EVIDENCE_REF_FIELDS
+        }
+        source_refs = filtered_evidence.get("source_refs")
+        if isinstance(source_refs, dict):
+            filtered_evidence["source_refs"] = {
+                key: value
+                for key, value in source_refs.items()
+                if key not in _FRESH_REQUEST_EVIDENCE_REF_FIELDS
+            }
+        contract_values["evidence_contract"] = filtered_evidence
     evidence_contract = without_execution_binding_evidence(
-        contract.evidence_contract
+        contract_values["evidence_contract"]
     )
     return {
         "schema_version": TASK_INPUT_CONTRACT_SCHEMA_VERSION,
         "task_id": str(workflow_task.id or ""),
         "task_contract_digest": str(task_contract_digest or ""),
-        "source_ref": str(contract.source_ref or ""),
-        "spec_ref": str(contract.spec_ref or ""),
-        "source_index_ref": str(contract.source_index_ref or ""),
-        "product_contract_ref": str(contract.product_contract_ref or ""),
-        "handoff_artifacts": _strings(contract.handoff_artifacts),
-        "acceptance_criteria": list(contract.acceptance_criteria or []),
-        "acceptance": str(contract.acceptance or ""),
-        "scope": _strings(contract.scope),
-        "exclusions": _strings(contract.exclusions),
-        "explicit_non_goals": _strings(contract.explicit_non_goals),
-        "unknowns": _strings(contract.unknowns),
+        "source_ref": str(contract_values["source_ref"] or ""),
+        "spec_ref": str(contract_values["spec_ref"] or ""),
+        "source_index_ref": str(contract_values["source_index_ref"] or ""),
+        "product_contract_ref": str(contract_values["product_contract_ref"] or ""),
+        "handoff_artifacts": _strings(contract_values["handoff_artifacts"]),
+        "acceptance_criteria": list(contract_values["acceptance_criteria"] or []),
+        "acceptance": str(contract_values["acceptance"] or ""),
+        "scope": _strings(contract_values["scope"]),
+        "exclusions": _strings(contract_values["exclusions"]),
+        "explicit_non_goals": _strings(contract_values["explicit_non_goals"]),
+        "unknowns": _strings(contract_values["unknowns"]),
         "evidence_contract": evidence_contract,
     }
 

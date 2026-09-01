@@ -27,6 +27,7 @@ def test_terminal_task_is_reopened_for_proven_request_rotation(
             id="TASK-ROTATE-TERMINAL",
             title="Rotate a cancelled workflow Task",
             status="cancelled",
+            completed_at="2026-08-31T00:00:00+00:00",
             contract=TaskContract(
                 behavior="delivery",
                 verification="pytest -q",
@@ -97,5 +98,6 @@ def test_terminal_task_is_reopened_for_proven_request_rotation(
     reopened = store.get(task.id)
     assert reopened is not None
     assert reopened.status == "backlog"
+    assert reopened.completed_at is None
     assert reopened.execution_binding.request_id == "REQ-NEW"
     assert reopened.execution_binding.request_revision == 1

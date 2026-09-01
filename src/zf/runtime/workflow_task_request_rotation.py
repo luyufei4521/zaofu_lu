@@ -270,6 +270,7 @@ def apply_task_request_binding(
                 "blocked_reason": "",
                 "assigned_to": "",
                 "active_dispatch_id": "",
+                "completed_at": None,
             }
             if rotation
             else None

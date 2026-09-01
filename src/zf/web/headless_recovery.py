@@ -8,6 +8,7 @@ from pathlib import Path
 from zf.core.config.schema import ZfConfig
 from zf.core.events import EventWriter
 from zf.core.events.factory import event_log_from_project
+from zf.core.events.segments import iter_event_records
 from zf.core.state.atomic_io import atomic_write_text
 from zf.web.projections.request_util import reconcile_pending_idempotency_keys
 
@@ -19,7 +20,7 @@ def reconcile_kanban_startup(
 ) -> dict[str, int]:
     writer = EventWriter(event_log_from_project(state_dir, config=config))
     return {
-        **reconcile_interrupted_headless_turns(state_dir, writer),
+        **reconcile_interrupted_headless_turns(state_dir, writer, config=config),
         "idempotency_keys": reconcile_pending_idempotency_keys(state_dir),
     }
 
@@ -27,20 +28,26 @@ def reconcile_kanban_startup(
 def reconcile_interrupted_headless_turns(
     state_dir: Path,
     writer: EventWriter,
+    *,
+    config: ZfConfig | None = None,
 ) -> dict[str, int]:
     """Fail turns that were running before this Web process started."""
-    events = writer.event_log.read_all()
-    terminal_turn_ids = {
-        str((event.payload or {}).get("turn_id") or "")
-        for event in events
+    terminal_turn_ids: set[str] = set()
+    starts = {}
+    # Do not call EventLog.read_all() here. A long-lived project can have
+    # hundreds of megabytes of archived events; retaining every decoded
+    # payload during Web startup caused multi-gigabyte RSS spikes and page
+    # exits. iter_event_records decodes one segment/row at a time and we
+    # retain only the small set of in-flight turn starts needed for recovery.
+    for record in iter_event_records(state_dir, config=config):
+        event = record.event
         if event.type in {
             "kanban.agent.turn.completed",
             "kanban.agent.turn.failed",
-        }
-        and isinstance(event.payload, dict)
-    }
-    starts = {}
-    for event in events:
+        } and isinstance(event.payload, dict):
+            turn_id = str(event.payload.get("turn_id") or "")
+            if turn_id:
+                terminal_turn_ids.add(turn_id)
         if event.type != "kanban.agent.turn.started":
             continue
         payload = event.payload if isinstance(event.payload, dict) else {}

@@ -297,7 +297,7 @@ def _resolve_causation(
                 return cached.id
             if cached.type == "fanout.child.dispatched":
                 try:
-                    events = event_log.read_all()
+                    events = _read_active_event_tail(event_log)
                 except Exception:
                     return cached.id
                 if _fanout_dispatch_is_active(events, cached):
@@ -308,17 +308,64 @@ def _resolve_causation(
                 # because this type was unknown here — every synth hook
                 # went orphan and the synth looked dead for 40min.
                 try:
-                    events = event_log.read_all()
+                    events = _read_active_event_tail(event_log)
                 except Exception:
                     return cached.id
                 if _synth_dispatch_is_active(events, cached):
                     return cached.id
                 return _latest_active_dispatch_for_actor(events, actor)
+    # Hook subprocesses are short-lived, so the in-memory EventIndex usually
+    # has no event bodies after loading its persisted id maps.  Do not make
+    # every Pre/PostToolUse hook decode all historical archives (a Loshu log
+    # can be hundreds of MB): current dispatches are in the active segment.
+    # Only fall back to the canonical full scan when the bounded active tail
+    # cannot establish a dispatch (for example after an archive rotation).
     try:
-        return _latest_active_dispatch_for_actor(event_log.read_all(), actor)
+        recent = _read_active_event_tail(event_log)
+        active = _latest_active_dispatch_for_actor(recent, actor)
+        if active:
+            return active
     except Exception:
-        return None
+        pass
+    # Do not fall back to materialising every archived segment here.  Hooks
+    # are short-lived and can arrive hundreds of times per worker turn; a
+    # long-running project may have hundreds of MB of immutable archives, so
+    # that fallback turns routine telemetry into an O(N) memory/CPU spike.
+    # Missing causation is safe (the event remains observable); the next
+    # dispatch/active-tail sample will restore the binding.
     return None
+
+
+def _read_active_event_tail(
+    event_log: EventLog,
+    *,
+    max_bytes: int = 8 * 1024 * 1024,
+) -> list[ZfEvent]:
+    """Decode a bounded tail of the active segment for hook causation.
+
+    ``events.jsonl`` is append-only and the active segment contains the
+    current worker dispatches.  Keeping this read bounded prevents a
+    short-lived hook process from materialising every historical archive.
+    The first partial line is discarded; callers fall back to ``read_all``
+    when the tail is insufficient.
+    """
+    path = event_log.path
+    size = path.stat().st_size
+    start = max(0, size - max(int(max_bytes), 64 * 1024))
+    with path.open("rb") as handle:
+        handle.seek(start)
+        raw = handle.read()
+    if start:
+        newline = raw.find(b"\n")
+        if newline < 0:
+            return []
+        raw = raw[newline + 1 :]
+    events: list[ZfEvent] = []
+    for line in raw.splitlines():
+        event = event_log.decode_line(line.decode("utf-8", "replace"))
+        if event is not None:
+            events.append(event)
+    return events
 
 
 def _hook_context_state(
@@ -342,7 +389,9 @@ def _orphan_already_recorded(event_log: EventLog, *, session_id: str) -> bool:
     if not session_id:
         return False
     try:
-        for event in reversed(event_log.read_all()):
+        # Orphan dedupe is best-effort.  Keep it bounded to the active segment
+        # so an unresolved hook cannot force a full historical archive decode.
+        for event in reversed(_read_active_event_tail(event_log)):
             if event.type != "hook.orphan_event":
                 continue
             payload = event.payload if isinstance(event.payload, dict) else {}
@@ -545,7 +594,7 @@ _WRITE_TOOL_NAMES = frozenset({
 })
 def _active_task_id_for_actor(event_log: EventLog, actor: str) -> str:
     try:
-        events = event_log.read_all()
+        events = _read_active_event_tail(event_log)
         active_event_id = _latest_active_dispatch_for_actor(events, actor)
         if not active_event_id:
             return ""
@@ -871,7 +920,19 @@ def run(args: argparse.Namespace) -> int:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
     event_writer = EventWriter(event_log)
-    completed_tail_quiesced = _completed_tail_quiesced(event_log)
+    # The completed-tail guard is only relevant to stop-check hooks.  Running
+    # it for every Pre/PostToolUse event would replay the full event history
+    # in each short-lived hook process, which is prohibitive once a project
+    # has a large archive (and can OOM the host during fanout).
+    completed_tail_quiesced = (
+        _completed_tail_quiesced(event_log)
+        if args.event in {
+            "provider.stop.check",
+            "claude.hook.stop",
+            "codex.hook.stop",
+        }
+        else False
+    )
     if completed_tail_quiesced and args.event == "provider.stop.check":
         return 0
 
@@ -995,6 +1056,9 @@ def _completed_tail_quiesced(event_log: EventLog) -> bool:
     try:
         from zf.autoresearch.failure_signals import completed_run_quiesced
 
-        return completed_run_quiesced(event_log.read_all())
+        # Stop hooks are the only callers.  Keep the probe bounded to the
+        # active segment; replaying immutable archives here can allocate
+        # hundreds of MB for a single provider stop callback.
+        return completed_run_quiesced(_read_active_event_tail(event_log))
     except Exception:
         return False

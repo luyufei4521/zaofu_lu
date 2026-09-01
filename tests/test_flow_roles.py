@@ -151,3 +151,24 @@ def test_legacy_prd_prefix_maps_to_current_flow_writer() -> None:
 
     assert binding.owner_role == "dev-lane-0"
     assert binding.owner_instance == "dev-lane-0"
+
+
+def test_legacy_prd_prefix_does_not_admit_an_unknown_writer() -> None:
+    config = ZfConfig(roles=[
+        RoleConfig(
+            name="dev-lane-0",
+            instance_id="dev-lane-0",
+            role_kind="writer",
+            flow_kind="prd",
+        ),
+    ])
+
+    with pytest.raises(
+        FlowRoleBindingError,
+        match="flow_owner_instance_unknown",
+    ):
+        resolve_writer_owner(
+            config,
+            flow_kind="prd",
+            owner_instance="prd-dev-lane-9",
+        )

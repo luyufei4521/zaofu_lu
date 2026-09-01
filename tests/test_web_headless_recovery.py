@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from zf.core.events import EventLog, ZfEvent
+from zf.core.events import EventLog, EventWriter, ZfEvent
+from zf.web.headless_recovery import reconcile_interrupted_headless_turns
 from zf.web.server import create_app
 
 
@@ -75,3 +76,51 @@ def test_create_app_reconciles_interrupted_turn_thread_and_action(
     ]
     assert rows[-1]["state"] == "completed"
     assert rows[-1]["response"]["status"] == "interrupted_by_server_restart"
+
+
+def test_reconcile_interrupted_headless_turns_streams_event_segments(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / ".zf"
+    state_dir.mkdir()
+    log = EventLog(state_dir / "events.jsonl")
+    completed = ZfEvent(
+        type="kanban.agent.turn.started",
+        actor="web",
+        task_id="TASK-COMPLETE",
+        correlation_id="turn-complete",
+        payload={"turn_id": "turn-complete"},
+    )
+    interrupted = ZfEvent(
+        type="kanban.agent.turn.started",
+        actor="web",
+        task_id="TASK-INTERRUPTED",
+        correlation_id="turn-interrupted",
+        payload={"turn_id": "turn-interrupted"},
+    )
+    log.append(completed)
+    log.append(ZfEvent(
+        type="kanban.agent.turn.completed",
+        actor="web",
+        task_id=completed.task_id,
+        causation_id=completed.id,
+        correlation_id=completed.correlation_id,
+        payload={"turn_id": "turn-complete"},
+    ))
+    log.append(interrupted)
+
+    result = reconcile_interrupted_headless_turns(
+        state_dir,
+        EventWriter(log),
+    )
+
+    assert result == {"turns": 1, "threads": 0}
+    failures = [
+        event
+        for event in log.read_all()
+        if event.type == "kanban.agent.turn.failed"
+    ]
+    assert [event.payload["turn_id"] for event in failures] == [
+        "turn-interrupted"
+    ]
+    assert failures[0].causation_id == interrupted.id

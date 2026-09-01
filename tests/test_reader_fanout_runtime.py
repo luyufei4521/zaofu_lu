@@ -8245,13 +8245,16 @@ def test_reader_fanout_retries_provider_turn_closed_without_child_result(
     assert len(lost) == 1
     assert lost[0].payload["lost_signal_type"] == "provider.turn.closed"
     assert lost[0].payload["reason"] == "provider_turn_closed_without_child_result"
-    assert any(
-        event.type == "fanout.child.dispatched"
+    retry_dispatch = next(
+        event
+        for event in events
+        if event.type == "fanout.child.dispatched"
         and event.payload.get("fanout_id") == fanout_id
         and event.payload.get("child_id") == "review-a"
         and event.payload.get("run_id") == f"run-{fanout_id}-review-a-retry-1"
-        for event in events
     )
+    retry_manifest_ref = retry_dispatch.payload["attempt_source_manifest_ref"]
+    assert (state_dir / retry_manifest_ref).is_file()
     assert [sent[0] for sent in transport.sent].count("review-a") == 2
 
 

@@ -130,3 +130,24 @@ def test_replica_owner_instance_must_be_exact_and_unambiguous() -> None:
             flow_kind="prd",
             owner_instance="prd-dev",
         )
+
+
+def test_legacy_prd_prefix_maps_to_current_flow_writer() -> None:
+    config = ZfConfig(roles=[
+        RoleConfig(
+            name="dev-lane-0",
+            instance_id="dev-lane-0",
+            role_kind="writer",
+            flow_kind="prd",
+        ),
+    ])
+
+    binding = resolve_writer_owner(
+        config,
+        flow_kind="prd",
+        owner_role="prd-dev-lane-0",
+        owner_instance="prd-dev-lane-0",
+    )
+
+    assert binding.owner_role == "dev-lane-0"
+    assert binding.owner_instance == "dev-lane-0"

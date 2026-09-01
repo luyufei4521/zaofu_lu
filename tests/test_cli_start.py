@@ -160,12 +160,49 @@ def test_startup_catchup_uses_durable_offset_path():
             raise AssertionError(f"unexpected failure event: {event}")
 
     class FakeOrchestrator:
+        def _load_offset(self):
+            return 100
+
+        def run_once(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            return []
+
+    class FakeLogWithDelta(FakeLog):
+        def read_from_offset(self, offset):
+            assert offset == 100
+            return (["pending-event"], 125)
+
+    _run_startup_orchestrator_catchup(
+        FakeOrchestrator(), FakeLogWithDelta(),
+    )
+
+    assert calls == [(
+        (), {"events": ["pending-event"], "consumed_offset": 125},
+    )]
+
+
+def test_startup_catchup_keeps_idle_tick_when_no_delta():
+    from zf.cli.start import _run_startup_orchestrator_catchup
+
+    calls = []
+
+    class FakeLog:
+        def read_from_offset(self, offset):
+            assert offset == 100
+            return ([], 100)
+
+        def append(self, event):  # noqa: ANN001
+            raise AssertionError(f"unexpected failure event: {event}")
+
+    class FakeOrchestrator:
+        def _load_offset(self):
+            return 100
+
         def run_once(self, *args, **kwargs):
             calls.append((args, kwargs))
             return []
 
     _run_startup_orchestrator_catchup(FakeOrchestrator(), FakeLog())
-
     assert calls == [((), {})]
 
 

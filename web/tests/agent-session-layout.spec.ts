@@ -98,6 +98,53 @@ test("Kanban Agent docked and fullscreen layout stays inside the workbench", asy
   await expectHorizontallyInsideViewport(page, page.locator(".agent-session-panes.split"), "split panes");
 });
 
+test("Kanban Agent session navigation stays fixed and preserves each thread position", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openKanbanAgent(page);
+  await createSecondThread(page);
+
+  const navigation = page.getByTestId("agent-thread-navigation");
+  const thread = page.locator(".headless-thread");
+  const tabs = page.getByRole("tablist", { name: "Agent threads" }).getByRole("button");
+  await expect(navigation).toBeVisible();
+  await expect(page.getByLabel("Compare with thread")).not.toBeVisible();
+  await expect(tabs).toHaveCount(2);
+  const initialTitles = await tabs.locator("span:nth-child(2)").allTextContents();
+  expect(initialTitles).toEqual(["main", "chat 2"]);
+  expect(new Set(initialTitles).size, "session titles should be unique").toBe(initialTitles.length);
+  expect(
+    await navigation.evaluate((node, scrollNode) => !scrollNode.contains(node), await thread.elementHandle()),
+    "session navigation should be outside the transcript scroller",
+  ).toBe(true);
+
+  await page.addStyleTag({ content: ".headless-thread .agent-turn-list { min-height: 2400px !important; }" });
+  const dockedNavigationTop = (await box(navigation)).top;
+  await thread.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => thread.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  expect(Math.abs((await box(navigation)).top - dockedNavigationTop)).toBeLessThanOrEqual(1);
+
+  // chat 2 is active after creation. Give each session a different reading
+  // position, switch twice, and verify neither selection nor tab order jumps.
+  await thread.evaluate((node) => { node.scrollTop = 320; node.dispatchEvent(new Event("scroll")); });
+  await tabs.filter({ hasText: "main" }).click();
+  await expect(tabs.filter({ hasText: "main" })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => tabs.locator("span:nth-child(2)").allTextContents()).toEqual(initialTitles);
+  await expect.poll(() => thread.evaluate((node) => node.scrollHeight - node.clientHeight)).toBeGreaterThan(900);
+  await thread.evaluate((node) => { node.scrollTop = 700; node.dispatchEvent(new Event("scroll")); });
+  await tabs.filter({ hasText: "chat 2" }).click();
+  await expect(tabs.filter({ hasText: "chat 2" })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(async () => Math.round(await thread.evaluate((node) => node.scrollTop))).toBe(320);
+  await expect.poll(() => tabs.locator("span:nth-child(2)").allTextContents()).toEqual(initialTitles);
+
+  await page.getByRole("button", { name: "Fullscreen Kanban Agent" }).click();
+  await expect(navigation).toBeVisible();
+  await expect(page.getByLabel("Compare with thread")).toBeVisible();
+  const fullscreenNavigationTop = (await box(navigation)).top;
+  await thread.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => thread.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  expect(Math.abs((await box(navigation)).top - fullscreenNavigationTop)).toBeLessThanOrEqual(1);
+});
+
 test("Kanban Agent mobile fullscreen stacks split panes without overflow", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 780 });
   await openKanbanAgent(page);

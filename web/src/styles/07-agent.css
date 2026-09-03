@@ -915,6 +915,14 @@
   font-size: var(--text-12);
 }
 
+.agent-plan-option-guidance {
+  margin-top: 5px !important;
+  border-left: 2px solid color-mix(in oklab, var(--brand) 42%, var(--line));
+  padding-left: 6px;
+  color: color-mix(in oklab, var(--text) 72%, var(--muted-foreground)) !important;
+  line-height: 1.35;
+}
+
 .agent-plan-option textarea {
   width: 100%;
   min-height: 48px;

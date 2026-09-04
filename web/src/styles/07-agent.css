@@ -1623,9 +1623,14 @@
   transform: rotate(45deg);
 }
 
-/* chat-e2e F2: durable pending-proposal strip above the composer */
+/* Durable pending actions stay visually separate from the message composer. */
 .headless-pending-proposals {
-  border-top: 1px solid var(--line);
+  flex: 0 0 auto;
+  width: var(--headless-lane-width);
+  max-width: var(--headless-lane-width);
+  margin: 0 auto 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   background: color-mix(in oklab, var(--brand) 5%, transparent);
   padding: 6px 10px;
   display: flex;

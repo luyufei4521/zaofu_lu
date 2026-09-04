@@ -72,6 +72,30 @@ async function selectSplitThread(page: Page) {
   await splitSelect.selectOption(value ?? "");
 }
 
+async function stubPendingProposal(page: Page) {
+  await page.route("**/kanban-agent/pending-proposals", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        schema_version: "kanban-agent.pending-proposals.v1",
+        project_id: "layout-test",
+        items: [{
+          proposal_event_id: "evt-layout-proposal",
+          proposal_id: "evt-layout-proposal",
+          action: "idea-to-product",
+          requested_action: "idea-to-product",
+          reason: "Verify pending proposal layout",
+          valid: true,
+          validation_error: "",
+          title: "Start product workflow",
+          payload: {},
+          refs: {},
+        }],
+      }),
+    });
+  });
+}
+
 test("Kanban Agent docked and fullscreen layout stays inside the workbench", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openKanbanAgent(page);
@@ -96,6 +120,19 @@ test("Kanban Agent docked and fullscreen layout stays inside the workbench", asy
   await expect(page.locator(".agent-session-panes.split")).toBeVisible();
   await expect(page.getByRole("button", { name: "Resize split pane" })).toBeVisible();
   await expectHorizontallyInsideViewport(page, page.locator(".agent-session-panes.split"), "split panes");
+});
+
+test("Kanban Agent pending proposal card stays separate from the composer", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await stubPendingProposal(page);
+  await openKanbanAgent(page);
+
+  const pending = await box(page.getByLabel("Pending proposals"));
+  const composer = await box(page.locator(".headless-composer"));
+  expect(composer.top - pending.bottom, "proposal card and composer gap").toBeGreaterThanOrEqual(8);
+  expect(Math.abs(pending.left - composer.left), "proposal and composer left edges").toBeLessThanOrEqual(1);
+  expect(Math.abs(pending.right - composer.right), "proposal and composer right edges").toBeLessThanOrEqual(1);
+  await expectInsideViewport(page, page.getByLabel("Pending proposals"), "pending proposal card");
 });
 
 test("Kanban Agent session navigation stays fixed and preserves each thread position", async ({ page }) => {

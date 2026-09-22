@@ -3,7 +3,7 @@
 > 本文件由 `src/zf/cli/main.py::build_parser()` 生成，禁止手工修改。
 > 重新生成：`uv run python scripts/manual-docs.py generate`。
 
-当前共 **69** 个顶层命令 family、**296** 条可寻址命令路径。
+当前共 **69** 个顶层命令 family、**297** 条可寻址命令路径。
 命令描述直接取自 argparse parser，因此描述语言以代码中的 help 为准。
 
 ## `zf agents`
@@ -173,6 +173,7 @@ Inspect/render the effective canonical config
 |---|---|
 | `zf config` | Inspect/render the effective canonical config |
 | `zf config inspect` | Inspect expanded config |
+| `zf config migrate-models` | Authorize model-only changes for stopped flows |
 | `zf config render` | Render expanded config and lock |
 
 ## `zf cost`

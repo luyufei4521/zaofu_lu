@@ -3,7 +3,7 @@
 > Generated from `src/zf/cli/main.py::build_parser()`; do not edit by hand.
 > Regenerate with `uv run python scripts/manual-docs.py generate`.
 
-The parser currently exposes **69** top-level families and **296** addressable command paths.
+The parser currently exposes **69** top-level families and **297** addressable command paths.
 Descriptions come directly from argparse help text.
 
 ## `zf agents`
@@ -173,6 +173,7 @@ Inspect/render the effective canonical config
 |---|---|
 | `zf config` | Inspect/render the effective canonical config |
 | `zf config inspect` | Inspect expanded config |
+| `zf config migrate-models` | Authorize model-only changes for stopped flows |
 | `zf config render` | Render expanded config and lock |
 
 ## `zf cost`

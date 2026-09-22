@@ -506,6 +506,7 @@ KNOWN_EVENT_TYPES: frozenset[str] = frozenset({
     "workflow.dependency_barrier.blocked",
     "flow.roles.activation.requested", "flow.roles.activation.applied",
     "flow.roles.activation.failed", "flow.roles.activation.recovered",
+    "flow.roles.model_migration.authorized",
     "workflow.research.adopted", "workflow.result.available",
     "workflow.result.return.skipped",
     "workflow.reconcile.requested",

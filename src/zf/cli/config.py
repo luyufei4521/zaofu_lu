@@ -21,6 +21,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:
         help="Inspect/render the effective canonical config",
     )
     sub = parser.add_subparsers(dest="config_cmd")
+    migrate = sub.add_parser("migrate-models", help="Authorize model-only changes for stopped flows")
+    migrate.add_argument("--previous-config", type=Path, required=True)
+    migrate.add_argument("--config", type=Path, default=None)
+    migrate.add_argument("--reason", required=True)
+    migrate.set_defaults(func=_run_migrate_models)
 
     inspect = sub.add_parser("inspect", help="Inspect expanded config")
     inspect.add_argument("--config", type=Path, default=None)
@@ -54,6 +59,25 @@ def _run(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 2
+
+
+def _run_migrate_models(args: argparse.Namespace) -> int:
+    from types import SimpleNamespace
+    from zf.core.events.factory import event_log_from_project
+    from zf.core.events.writer import EventWriter
+    from zf.runtime.flow_role_model_migration import authorize_model_migration
+    try:
+        config, _, _, state_dir = _load(args.config)
+        previous = load_config(args.previous_config.resolve())
+        event_log = event_log_from_project(state_dir, config=config, warn=False)
+        orch = SimpleNamespace(config=config, state_dir=state_dir,
+                               event_log=event_log, event_writer=EventWriter(event_log))
+        ids = authorize_model_migration(orch, previous, reason=args.reason)
+    except (ValueError, ConfigError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps({"authorized_event_ids": ids, "status": "authorized"}))
+    return 0
 
 
 def _run_inspect(args: argparse.Namespace) -> int:

@@ -57,7 +57,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:
     )
     reconcile.add_argument(
         "--reset", action="store_true",
-        help="Reset orphaned in_progress tasks back to `ready`. "
+        help="Reset orphaned in_progress tasks back to `backlog`. "
              "Without this flag, only reports.",
     )
     reconcile.add_argument(
@@ -300,6 +300,14 @@ def _run_reconcile(args: argparse.Namespace) -> int:
     healthy = 0
     for task in inflight:
         assignee = (task.assigned_to or "").strip()
+        if task.status == "ready":
+            orphans.append((
+                task.id,
+                task.status,
+                assignee or "<none>",
+                "legacy ready status must be normalized to backlog",
+            ))
+            continue
         if not assignee:
             if task.status == "in_progress":
                 orphans.append((task.id, task.status, "<none>",
@@ -329,11 +337,11 @@ def _run_reconcile(args: argparse.Namespace) -> int:
 
     if not getattr(args, "reset", False) or getattr(args, "dry_run", False):
         print()
-        print("Run `zf state reconcile --reset` to push these tasks back to `ready`")
+        print("Run `zf state reconcile --reset` to push these tasks back to `backlog`")
         print("(removes assignee and clears dispatched_at; events are append-only).")
         return 0 if not orphans else 2  # 2 = state inconsistent, no action taken
 
-    # Reset: status → ready, assignee → None, dispatched_at → None
+    # Reset: status → backlog, assignee → None, dispatched_at → None
     try:
         event_log = event_log_from_project(state_dir, config=ctx.config)
     except EventSigningConfigError as exc:
@@ -344,7 +352,7 @@ def _run_reconcile(args: argparse.Namespace) -> int:
     reset_count = 0
     for tid, _status, assignee, reason in orphans:
         task_store.update(
-            tid, status="ready", assigned_to=None, dispatched_at=None,
+            tid, status="backlog", assigned_to=None, dispatched_at=None,
             active_dispatch_id="",
         )
         writer.emit(
@@ -353,7 +361,7 @@ def _run_reconcile(args: argparse.Namespace) -> int:
             task_id=tid,
             payload={
                 "from_status": _status,
-                "to_status": "ready",
+                "to_status": "backlog",
                 "from_assignee": assignee,
                 "to_assignee": None,
                 "source": "state_reconcile",
@@ -362,7 +370,7 @@ def _run_reconcile(args: argparse.Namespace) -> int:
         )
         reset_count += 1
 
-    print(f"\nreset {reset_count} task(s) back to `ready`.")
+    print(f"\nreset {reset_count} task(s) back to `backlog`.")
     return 0
 
 

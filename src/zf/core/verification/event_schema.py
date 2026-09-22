@@ -443,6 +443,28 @@ def runtime_snapshot_event_schema_rules() -> dict[str, dict[str, Any]]:
     }
 
 
+def flow_role_model_migration_event_schema_rules() -> dict[str, dict[str, Any]]:
+    """Canonical payload contract for model-only Flow role migrations."""
+    return {
+        "flow.roles.model_migration.authorized": {
+            "required": [
+                "previous_activation_id", "workflow_run_id", "role_digests",
+                "changes", "reason", "previous_manifest_ref",
+            ],
+            "non_empty": [
+                "previous_activation_id", "workflow_run_id", "role_digests",
+                "changes", "reason",
+            ],
+            "nested": {
+                "previous_manifest_ref": {
+                    "required": ["ref", "sha256"],
+                    "non_empty": ["ref", "sha256"],
+                },
+            },
+        },
+    }
+
+
 def fanout_request_schema_rules() -> dict[str, dict[str, Any]]:
     """Canonical payload contract for worker-mediated fanout requests."""
     return {
@@ -1928,4 +1950,5 @@ __all__ = [
     "workflow_invoke_schema_rules",
     "automation_event_schema_rules",
     "assignment_event_schema_rules",
+    "flow_role_model_migration_event_schema_rules",
 ]

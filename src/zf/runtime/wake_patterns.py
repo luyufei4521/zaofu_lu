@@ -69,6 +69,10 @@ WAKE_PATTERNS: tuple[str, ...] = (
     "task_map.ready",
     "workflow.invoke.requested",
     "channel.synthesis.requested",
+    # A Synthesizer continuation proposal is a kernel-owned, taskless route.
+    # It must wake the reactor immediately so adaptive discussion does not
+    # wait for an unrelated event or the deadline sweep.
+    "channel.discussion.next_round.proposed",
     "channel.synthesis.repair.requested",
     "channel.question.dedup.requested",
     "channel.question.dedup.applied",
@@ -326,6 +330,9 @@ WAKE_PATTERNS: tuple[str, ...] = (
     "autoresearch.loop.completed",
     "evolution.trial.execution.completed",
     "evolution.trial.execution.failed",
+    "evolution.skill_optimizer.selection.completed",
+    "evolution.skill_optimizer.execution.completed",
+    "evolution.skill_optimizer.execution.failed",
     "evolution.environment.preflight.failed",
     "evolution.canary.completed",
     "evolution.canary.failed",

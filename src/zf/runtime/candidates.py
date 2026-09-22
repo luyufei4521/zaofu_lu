@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import subprocess
 import time
 from dataclasses import dataclass, asdict, replace
@@ -2019,6 +2020,7 @@ class CandidateRebuilder:
         """
 
         owners: list[tuple[str, str, str]] = []
+        task_by_id = {task.task_id: task for task in tasks}
         files_by_task: dict[str, list[str]] = {}
         for task in tasks:
             files = sorted(
@@ -2034,6 +2036,16 @@ class CandidateRebuilder:
             for path in files:
                 for owner_task_id, owner_task_ref, owner_path in owners:
                     if not _paths_overlap({path}, {owner_path}):
+                        continue
+                    # A dependency task whose commit is already an ancestor of
+                    # the later task is historical input, not a parallel write
+                    # owner.  Its paths will be skipped by commit lineage
+                    # handling; rejecting here incorrectly blocks consolidation
+                    # whenever evidence files were refreshed by the successor.
+                    owner_task = task_by_id.get(owner_task_id)
+                    if owner_task is not None and self._git_is_ancestor(
+                        owner_task.source_commit, task.source_commit
+                    ):
                         continue
                     return {
                         "task_id": task.task_id,
@@ -2259,10 +2271,19 @@ def _quality_gate_env(worktree: Path) -> dict[str, str]:
     """Run candidate quality checks against the candidate worktree checkout."""
     env = os.environ.copy()
     venv_bin = worktree / ".venv" / ("Scripts" if os.name == "nt" else "bin")
-    if venv_bin.is_dir():
+    if (venv_bin / ("python.exe" if os.name == "nt" else "python")).exists():
         inherited_path = env.get("PATH", "").split(os.pathsep)
         env["PATH"] = os.pathsep.join(
             [str(venv_bin), *(part for part in inherited_path if part != str(venv_bin))]
+        )
+    else:
+        # Candidate checkouts do not carry the harness virtualenv. Keep
+        # contract commands using ``python`` executable in the same runtime
+        # that launched ZaoFu (the shell PATH may contain only ``zf``).
+        runtime_bin = Path(shutil.which("pytest") or sys.executable).parent
+        inherited_path = env.get("PATH", "").split(os.pathsep)
+        env["PATH"] = os.pathsep.join(
+            [str(runtime_bin), *(part for part in inherited_path if part != str(runtime_bin))]
         )
 
     project_src = worktree / "src"

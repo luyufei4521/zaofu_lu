@@ -688,6 +688,22 @@ _GENERIC_WORKFLOW_COMPLETED_RULE: dict[str, Any] = {
 
 _GENERIC_WORKFLOW_V1: dict[str, dict[str, Any]] = {
     **_CANONICAL_DAG_V8,
+    "flow.roles.model_migration.authorized": {
+        "required": [
+            "previous_activation_id", "workflow_run_id", "role_digests",
+            "changes", "reason", "previous_manifest_ref",
+        ],
+        "non_empty": [
+            "previous_activation_id", "workflow_run_id", "role_digests",
+            "changes", "reason",
+        ],
+        "nested": {
+            "previous_manifest_ref": {
+                "required": ["ref", "sha256"],
+                "non_empty": ["ref", "sha256"],
+            },
+        },
+    },
     "run.goal.completion.claimed": _GENERIC_WORKFLOW_COMPLETION_CLAIM_RULE,
     "run.goal.completed": _GENERIC_WORKFLOW_COMPLETED_RULE,
 }

@@ -160,6 +160,7 @@ _KERNEL_LIVENESS_EVENTS = frozenset({
     # channel_router.route_channel_message.
     "channel.message.posted",
     "channel.agent.reply.requested", "channel.synthesis.requested",
+    "channel.discussion.next_round.proposed",
     "channel.synthesis.repair.requested",
     "channel.question.dedup.requested",
     "channel.question.dedup.applied",
@@ -2442,6 +2443,12 @@ class WorkflowRuntimeCoordinator(
             rejected = self._reject_invalid_lifecycle_event(event)
             if rejected:
                 decisions.append(rejected)
+                self._processed_event_ids.add(event.id)
+                continue
+
+            stale_candidate_success = self._reject_stale_candidate_success(event)
+            if stale_candidate_success is not None:
+                decisions.append(stale_candidate_success)
                 self._processed_event_ids.add(event.id)
                 continue
 

@@ -1,4 +1,8 @@
-"""Typed contract handoff reconciliation for writer fanout results."""
+"""Typed contract handoff reconciliation for writer fanout results.
+
+See ``docs/impl/writer-contract-handoff.md`` for the authority identity and
+legacy-worker compatibility rule.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,7 @@ from zf.runtime.impl_self_check import (
     write_impl_self_check,
 )
 from zf.runtime.task_contract_snapshot import (
+    TASK_CONTRACT_AUTHORITY_FIELDS,
     TaskContractSnapshotError,
     build_target_snapshot,
     build_task_contract_snapshot,
@@ -545,6 +550,15 @@ class WriterContractHandoffMixin:
                     target_snapshot.get("contract_snapshot_digest") or ""
                 ),
             }
+            # Authority fields are part of the canonical contract identity.
+            # Older workers may omit them from their self-check payload; fill
+            # them from the immutable contract snapshot before strict
+            # validation so handoff remains backwards compatible while still
+            # binding the result to the current task authority.
+            for key in TASK_CONTRACT_AUTHORITY_FIELDS:
+                value = contract_snapshot.get(key)
+                if value not in (None, "", 0):
+                    expected_identity[key] = str(value)
             for key, value in expected_identity.items():
                 if self_check.get(key) in (None, ""):
                     self_check[key] = value

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from zf.core.events.model import ZfEvent
 from zf.core.events.writer import EventWriter
 from zf.core.task.schema import TaskContract
@@ -14,6 +16,10 @@ from zf.runtime.task_contract_snapshot import (
     task_map_generation,
 )
 from zf.runtime.task_contract_authority import TaskContractAuthorityService
+from zf.runtime.impl_self_check import (
+    ImplSelfCheckError,
+    normalize_impl_self_check,
+)
 from tests.test_writer_fanout_runtime import (
     _child,
     _commit,
@@ -476,3 +482,141 @@ def test_current_contract_completion_recovers_identity_failed_child_once(
     assert completed[0].payload["target_commit"] == source_commit
     assert completed[0].payload["recovered_from_status"] == "failed"
     assert _child(_manifest(state_dir, fanout_id), "TASK-1")["status"] == "completed"
+
+
+def test_handoff_backfills_missing_contract_authority_fields(tmp_path: Path):
+    """Legacy worker self-checks may omit canonical authority identity."""
+    state_dir, log, _transport, orch = _state(
+        tmp_path,
+        harness_profile="baseline",
+    )
+    orch._typed_task_contract_handoff_enabled = lambda _payload: True  # type: ignore[method-assign]
+    orch.config.workflow.impl_self_check_required = True
+    _seed_tasks(state_dir)
+    store = TaskStore(state_dir / "kanban.json")
+    _replace_contract(state_dir, store, _typed_contract())
+    _start(orch)
+    started = next(event for event in log.read_all() if event.type == "fanout.started")
+    fanout_id = started.payload["fanout_id"]
+    child = _child(_manifest(state_dir, fanout_id), "TASK-1")
+    source_commit = _commit(Path(child["workdir"]), "a.txt", "delivered\n", "deliver")
+    snapshot = json.loads(
+        (state_dir / child["contract_snapshot_ref"]).read_text(encoding="utf-8")
+    )
+    self_check = _impl_self_check_body(
+        snapshot,
+        attempt_id=str(child.get("attempt_id") or child["run_id"]),
+        source_commit=source_commit,
+        include_snapshot_ref=False,
+    )
+    self_check.update({
+        "contract_snapshot_ref": child["contract_snapshot_ref"],
+        "contract_snapshot_digest": child["contract_snapshot_digest"],
+    })
+    for key in TASK_CONTRACT_AUTHORITY_FIELDS:
+        self_check.pop(key, None)
+    progress = ZfEvent(
+        type="dev.build.done",
+        actor=child["role_instance"],
+        task_id="TASK-1",
+        correlation_id=child["workflow_run_id"],
+        payload={
+            "fanout_id": fanout_id,
+            "child_id": child["child_id"],
+            "run_id": child["run_id"],
+            "dispatch_id": child["run_id"],
+            "attempt_id": self_check["attempt_id"],
+            "source_branch": child["source_branch"],
+            "workdir": child["workdir"],
+            "source_commit": source_commit,
+            "base_commit": child["base_commit"],
+            "workflow_run_id": child["workflow_run_id"],
+            "contract_revision": child["contract_revision"],
+            "task_map_generation": child["task_map_generation"],
+            "contract_snapshot_ref": child["contract_snapshot_ref"],
+            "contract_snapshot_digest": child["contract_snapshot_digest"],
+            "impl_self_check": self_check,
+        },
+    )
+    log.append(progress)
+    orch._maybe_update_writer_fanout(progress)  # type: ignore[attr-defined]
+    ref_updated = ZfEvent(
+        type="task.ref.updated",
+        actor="zf-cli",
+        task_id="TASK-1",
+        correlation_id=child["workflow_run_id"],
+        causation_id=progress.id,
+        payload={
+            "task_id": "TASK-1",
+            "task_ref": child["task_ref"],
+            "trigger_event_id": progress.id,
+            "source_branch": child["source_branch"],
+            "source_commit": source_commit,
+        },
+    )
+    log.append(ref_updated)
+    orch._maybe_update_writer_fanout(ref_updated)  # type: ignore[attr-defined]
+    assert not [
+        event
+        for event in log.read_all()
+        if event.type == "fanout.child.failed"
+        and event.causation_id == progress.id
+        and "contract_authority_revision" in event.payload.get("reason", "")
+    ]
+    completed = [
+        event
+        for event in log.read_all()
+        if event.type == "fanout.child.completed"
+        and event.payload.get("fanout_id") == fanout_id
+        and event.payload.get("task_id") == "TASK-1"
+    ]
+    assert len(completed) == 1
+    canonical_revision = snapshot["contract_authority_revision"]
+    assert completed[0].payload["contract_authority_revision"] == canonical_revision
+    sidecar_ref = completed[0].payload["impl_self_check_ref"]
+    sidecar = json.loads((state_dir / sidecar_ref).read_text(encoding="utf-8"))
+    assert sidecar["contract_authority_revision"] == canonical_revision
+
+
+def test_impl_self_check_rejects_wrong_contract_authority_revision():
+    contract_snapshot = {
+        "workflow_run_id": "run-1",
+        "task_id": "TASK-1",
+        "contract_revision": "contract-1",
+        "task_map_generation": "generation-1",
+        "contract_authority_revision": "authority-canonical",
+        "acceptance_criteria": [],
+        "verification_commands": [],
+    }
+    target_snapshot = {
+        "target_commit": "commit-1",
+        "contract_snapshot_ref": "snapshot.json",
+        "contract_snapshot_digest": "digest-1",
+    }
+    payload = {
+        "impl_self_check": {
+            "schema_version": "impl-self-check.v1",
+            "workflow_run_id": "run-1",
+            "task_id": "TASK-1",
+            "attempt_id": "attempt-1",
+            "contract_revision": "contract-1",
+            "task_map_generation": "generation-1",
+            "contract_authority_revision": "authority-stale",
+            "source_commit": "commit-1",
+            "target_commit": "commit-1",
+            "contract_snapshot_ref": "snapshot.json",
+            "contract_snapshot_digest": "digest-1",
+            "command_receipts": [],
+            "acceptance_results": [],
+            "residual_risks": [],
+            "evidence_refs": [],
+        }
+    }
+    with pytest.raises(ImplSelfCheckError, match="contract_authority_revision mismatch"):
+        normalize_impl_self_check(
+            payload,
+            contract_snapshot=contract_snapshot,
+            target_snapshot=target_snapshot,
+            expected_attempt_id="attempt-1",
+            strict=True,
+        )
